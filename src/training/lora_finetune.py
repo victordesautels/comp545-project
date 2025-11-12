@@ -8,25 +8,33 @@ LoRA finetuning utilities (SFT + PPO) for small LMs on macOS (MPS) and Linux (CU
 Usage examples:
 
 # Supervised fine-tuning (SFT) from JSONL with fields: {"prompt": "...", "response": "..."}
-python lora_finetune.py sft \
+python src/training/lora_finetune.py sft \
 	--model_id meta-llama/Llama-3.2-3B-Instruct \
 	--train_jsonl data/sft_train.jsonl \
 	--output_dir checkpoints/llama32_3b_sft_peft \
 	--lr 5e-5 --epochs 3 --batch_size 1 --grad_accum_steps 8
 
 # PPO fine-tuning (reward comes from monitors; here a stub that always returns 0)
-python lora_finetune.py ppo \
+python src/training/lora_finetune.py ppo \
 	--model_id meta-llama/Llama-3.2-3B-Instruct \
 	--train_jsonl data/ppo_prompts.jsonl \
 	--output_dir checkpoints/llama32_3b_ppo_peft \
 	--steps 100 --ppo_batch_size 4 --gen_max_new_tokens 128
 
 # Merge adapters into base weights (creates a deployable folder)
-python lora_finetune.py merge \
+python src/training/lora_finetune.py merge \
 	--base_model_id meta-llama/Llama-3.2-3B-Instruct \
 	--adapter_dir checkpoints/llama32_3b_sft_peft \
 	--output_dir checkpoints/llama32_3b_sft_merged
 """
+
+import sys
+from pathlib import Path
+
+# Make the project root importable
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 import argparse
 import json
@@ -45,29 +53,8 @@ from transformers import (
 from peft import LoraConfig, get_peft_model, PeftModel, prepare_model_for_kbit_training
 from trl import SFTTrainer, PPOTrainer, PPOConfig
 
-# ----------------------------------------
-# Device helpers
-# ----------------------------------------
-
-def pick_device() -> torch.device:
-	"""Prefer CUDA, then MPS, else CPU."""
-	if torch.cuda.is_available():
-		return torch.device("cuda")
-	if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-		return torch.device("mps")
-	return torch.device("cpu")
-
-
-def default_dtype_for_device(device: torch.device):
-	"""Use bf16 on CUDA if available, else fp16; on MPS prefer fp16; CPU fallback fp32."""
-	if device.type == "cuda":
-		if torch.cuda.is_bf16_supported():
-			return torch.bfloat16
-		return torch.float16
-	if device.type == "mps":
-		return torch.float16
-	return torch.float32
-
+from src.utils.device import pick_device, default_dtype_for_device
+from src.utils.model_loader import load_tokenizer, load_model
 
 # ----------------------------------------
 # Data utils
@@ -97,52 +84,6 @@ def build_sft_texts(records: List[Dict], bos_token: str = "", eos_token: str = "
 # For PPO, we expect fields: prompt; response is generated during training
 def build_ppo_prompts(records: List[Dict]) -> List[str]:
 	return [r.get("prompt", "") for r in records]
-
-
-# ----------------------------------------
-# Model + tokenizer loading
-# ----------------------------------------
-
-def load_tokenizer(model_id: str):
-	tok = AutoTokenizer.from_pretrained(model_id, use_fast=True)
-	if tok.pad_token is None:
-		# ensure pad token exists for packing/batching
-		tok.add_special_tokens({"pad_token": tok.eos_token})
-	return tok
-
-
-def load_base_model(model_id: str, device: torch.device, dtype) -> AutoModelForCausalLM:
-	# 4-bit quantization (bitsandbytes) is CUDA-only; on macOS we'll load normally in fp16
-	load_in_4bit = False
-	if device.type == "cuda":
-		try:
-			import bitsandbytes as bnb	# noqa: F401
-			load_in_4bit = True
-		except Exception:
-			load_in_4bit = False
-
-	if device.type == "cuda":
-		model = AutoModelForCausalLM.from_pretrained(
-			model_id,
-			device_map="auto",
-			torch_dtype=dtype,
-			load_in_4bit=load_in_4bit
-		)
-	elif device.type == "mps":
-		model = AutoModelForCausalLM.from_pretrained(
-			model_id,
-			torch_dtype=dtype
-		).to(device)
-	else:
-		model = AutoModelForCausalLM.from_pretrained(
-			model_id,
-			torch_dtype=dtype
-		)
-	try:
-		model.gradient_checkpointing_enable()
-	except Exception:
-		pass
-	return model
 
 
 def wrap_lora(model: AutoModelForCausalLM, r: int = 16, alpha: int = 32, dropout: float = 0.05,
@@ -179,7 +120,7 @@ def run_sft(
 	dtype = default_dtype_for_device(device)
 
 	tok = load_tokenizer(model_id)
-	model = load_base_model(model_id, device, dtype)
+	model, device, dtype = load_model(model_id, device, dtype)
 	model = wrap_lora(model)
 	model.print_trainable_parameters()
 
@@ -244,12 +185,12 @@ def run_ppo(
 	dtype = default_dtype_for_device(device)
 
 	tok = load_tokenizer(model_id)
-	base = load_base_model(model_id, device, dtype)
+	base, device, dtype = load_model(model_id, device, dtype)
 	policy = wrap_lora(base)
 	policy.print_trainable_parameters()
 
 	# reference model for KL control (frozen)
-	ref_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype)
+	ref_model = AutoModelForCausalLM.from_pretrained(model_id, dtype=dtype)
 	if device.type != "cpu":
 		ref_model.to(device)
 	ref_model.eval()
@@ -331,7 +272,7 @@ def merge_adapters(base_model_id: str, adapter_dir: str, output_dir: str):
 	device = pick_device()
 	dtype = default_dtype_for_device(device)
 
-	base = load_base_model(base_model_id, device, dtype)
+	base, device, dtype = load_model(base_model_id, device, dtype)
 	model = PeftModel.from_pretrained(base, adapter_dir)
 	merged = model.merge_and_unload()	# returns a plain transformers model
 

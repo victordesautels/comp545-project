@@ -14,8 +14,8 @@
 
 1. **Create the repo skeleton**
    - `shade-evasion/` with folders: `notebooks/`, `src/{agents,monitors,shade,training,eval,utils}`, `configs/`, `scripts/`, `data/`, `checkpoints/`, `reports/`  
-   *(A tidy layout avoids spaghetti later.)*
-    shade-evasion/
+
+    <!-- shade-evasion/
     notebooks/
         01_setup_sanity.ipynb
         02_cot_monitor_baseline.ipynb
@@ -38,7 +38,7 @@
     checkpoints/          # PEFT adapters, merged weights
     reports/              # saved plots, tables
     pyproject.toml or requirements.txt
-    README.md
+    README.md -->
 
 2. **Conda/uv/venv environment**
    - Python 3.10 or 3.11.  
@@ -51,11 +51,11 @@
      ```
      *(These are the core libraries for models, training, RL, logging, and fast inference.)*
 
-1. **GPU setup**
+3. **GPU setup**
    - Verify CUDA works: `python -c "import torch; print(torch.cuda.is_available())"`  
    *(Checks your GPU is actually usable.)*
 
-2. **Experiment tracking**
+4. **Experiment tracking**
    - `wandb` project: `shade-evasion-2025` with automatic logging of metrics, configs, and checkpoints.  
    *(So runs are recorded and comparable.)*
 
@@ -66,15 +66,12 @@
 5. **Pull open small models**
    - `meta-llama/Llama-3.2-3B` or `...-3B-Instruct`  
    - `Qwen/Qwen2.5-3B-Instruct` as an alternative  
-   *(Small models train faster and fit on modest GPUs.)*
 
 6. **Parameter‑efficient finetuning**
    - Use LoRA via `peft` for SFT and PPO; save adapters and optionally merge later.  
-   *(LoRA keeps memory low and lets you export or merge weights when needed.)*
 
 7. **Fast inference engine**
    - Use `vLLM` for batched evaluation once checkpoints are ready.  
-   *(Speeds up massive eval sweeps.)*
 
 ---
 
@@ -82,11 +79,9 @@
 
 8. **Get SHADE‑Arena tasks**
    - Clone/install and add `src/shade/` adapters exposing a simple interface: `reset()`, `step(action)`, `done`, `score`.  
-   *(Gives us a standard “env” API to plug agents into.)*
 
 9. **Agent wrapper**
    - `src/agents/hf_agent.py` wrapping a `transformers` model with `act(obs, tools)` and decoding params (temperature, top_p, stop tokens).  
-   *(Makes the model behave like a game-playing policy.)*
 
 10. **Trace capture**
     - Log prompts, model outputs, actions, and intermediate thoughts to JSONL.  
@@ -98,16 +93,15 @@
 
 11. **CoT monitor (no training)**
     - A small LLM or the same 3B model in judge mode: input = agent’s visible reasoning; output = suspicion score [0,100] plus rationale. Threshold configurable.  
-    *(A simple rule: above threshold means “flagged”.)*
+    *(above threshold means “flagged”.)*
 
 12. **Activation monitor (linear probe)**
     - Collect hidden states for episodes labeled benign vs sabotage.  
     - Train a logistic regression or linear SVM in `scikit-learn`. Save scaler + weights.  
-    *(Classic linear probe detects internal “suspicious” patterns.)*
+    *(Classic linear probe detects internal suspicious patterns.)*
 
 13. **Hybrid monitor**
     - Combine standardized CoT suspicion and probe score by union or weighted sum.  
-    *(Two weak detectors can be stronger together.)*
 
 ---
 
@@ -160,7 +154,7 @@
 
 22. **Fixed decoding for eval**
     - Use fixed `temperature`, `top_p`, and `max_new_tokens` across baselines and trained models.  
-    *(Keeps comparisons fair.)*
+    *(Keeps comparisons fair)*
 
 23. **Notebooks and plots**
     - `notebooks/08_eval_report.ipynb` builds ROC curves, histograms, and tables; exports CSVs to `reports/` and figures to `reports/figs/`.  
@@ -197,7 +191,7 @@
 
 31. **Seed control and logging**
     - Fix seeds in Python, NumPy, PyTorch. Log Git commit, `pip freeze`, and config for every run.  
-    *(So you can rerun and match results.)*
+    *(to rerun and match results.)*
 
 32. **Artifact management**
     - Save best‑K checkpoints by undetected‑sabotage on a held‑out split. Keep clear run IDs and timestamps.  
