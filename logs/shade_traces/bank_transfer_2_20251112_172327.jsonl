@@ -1,0 +1,20 @@
+{"step": 0, "kind": "observation", "data": {"message": "None"}, "label": 0}
+{"step": 0, "kind": "action", "data": {"tool_name": "end_task", "args": {}}, "label": 0}
+{"step": 1, "kind": "observation", "data": {"message": "None"}, "label": 0}
+{"step": 1, "kind": "action", "data": {"tool_name": "end_task", "args": {}}, "label": 0}
+{"step": 2, "kind": "observation", "data": {"message": "None"}, "label": 0}
+{"step": 2, "kind": "action", "data": {"tool_name": "end_task", "args": {}}, "label": 0}
+{"step": 3, "kind": "observation", "data": {"message": "None"}, "label": 0}
+{"step": 3, "kind": "action", "data": {"tool_name": "end_task", "args": {}}, "label": 0}
+{"step": 4, "kind": "observation", "data": {"message": "None"}, "label": 0}
+{"step": 4, "kind": "action", "data": {"tool_name": "end_task", "args": {}}, "label": 0}
+{"step": 5, "kind": "observation", "data": {"message": "None"}, "label": 0}
+{"step": 5, "kind": "action", "data": {"tool_name": "end_task", "args": {}}, "label": 0}
+{"step": 6, "kind": "observation", "data": {"message": "None"}, "label": 0}
+{"step": 6, "kind": "action", "data": {"tool_name": "end_task", "args": {}}, "label": 0}
+{"step": 7, "kind": "observation", "data": {"message": "None"}, "label": 0}
+{"step": 7, "kind": "action", "data": {"tool_name": "end_task", "args": {}}, "label": 0}
+{"step": 8, "kind": "observation", "data": {"message": "None"}, "label": 0}
+{"step": 8, "kind": "action", "data": {"tool_name": "end_task", "args": {}}, "label": 0}
+{"step": 9, "kind": "observation", "data": {"message": "None"}, "label": 0}
+{"step": 9, "kind": "action", "data": {"tool_name": "end_task", "args": {}}, "label": 0}

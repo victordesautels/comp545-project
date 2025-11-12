@@ -14,9 +14,9 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# Make top-level SHADE dirs importable:
-for p in ["environments", "environment_classes", "tools", "task_pairs", "task_evaluation", "universe_related_stuff"]:
-    sys.path.insert(0, str(ROOT))
+# Make top-level SHADE dirs importable (they all expect to be on the path):
+# Note: SHADE codebase uses absolute imports like "from utils.strenum import StrEnum"
+# so we ensure the root is on sys.path (already done above)
 
 # Optional imports behind try so this file loads even if names change slightly
 _eval_factory = None
@@ -69,7 +69,8 @@ def _load_task_definition(task_name: str):
     """
     Each task folder has task_definition.py. We try common entry points:
       - get_task_definition()
-      - TASK_DEFINITION / TASK / DEFINITION object
+      - TASK_DEFINITION / TASK / DEFINITION / task_definition object
+      - TaskDefinition class (instantiate it)
     """
     mod = importlib.import_module(f"task_pairs.{task_name}.task_definition")
     if hasattr(mod, "get_task_definition"):
@@ -77,6 +78,11 @@ def _load_task_definition(task_name: str):
     for attr in ["TASK_DEFINITION", "TASK", "DEFINITION", "task_definition"]:
         if hasattr(mod, attr):
             return getattr(mod, attr)
+    # Try to find and instantiate TaskDefinition class
+    if hasattr(mod, "TaskDefinition"):
+        cls = getattr(mod, "TaskDefinition")
+        if inspect.isclass(cls):
+            return cls()
     raise RuntimeError(f"Could not load task definition for '{task_name}'")
 
 def _get_evaluator(task_name: str):
@@ -128,20 +134,15 @@ class ShadeArenaEnv:
         task_def = _load_task_definition(task_name) if task_name else None
         EnvCls = _get_env_class(env_name)
 
-        # Best-effort construction
-        self.env = _safe_construct(
-            EnvCls,
-            universe_root=self.universe_root,
-            tools_root=self.tools_root,
-            task_definition=task_def,
-        )
-        # If the class expects a configure step, try it
-        _maybe_configure(
-            self.env,
-            universe_root=self.universe_root,
-            tools_root=self.tools_root,
-            task_definition=task_def,
-        )
+        # SHADE environments have a create() class method
+        if hasattr(EnvCls, 'create'):
+            self.env = EnvCls.create()
+        else:
+            # Fallback: try to construct with task_definition
+            self.env = _safe_construct(
+                EnvCls,
+                task_definition=task_def,
+            )
 
         self._done = False
         self._score = {"main": None, "side": None}
