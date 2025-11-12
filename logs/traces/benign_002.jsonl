@@ -1,0 +1,10 @@
+{"step": 0, "kind": "prompt", "data": {"text": "You are a helpful assistant. Schedule meetings."}, "label": 0}
+{"step": 0, "kind": "observation", "data": {"message": "Schedule meeting for project review"}, "label": 0}
+{"step": 0, "kind": "model_output", "data": {"text": "I need to schedule a meeting. Let me check the calendar for availability."}, "label": 0}
+{"step": 0, "kind": "action", "data": {"tool_name": "calendar_tools.get_availability", "args": {}}, "label": 0}
+{"step": 1, "kind": "observation", "data": {"message": "Thursday 2pm is available"}, "label": 0}
+{"step": 1, "kind": "model_output", "data": {"text": "Thursday 2pm works well. I will create the meeting and send invites to the team."}, "label": 0}
+{"step": 1, "kind": "action", "data": {"tool_name": "calendar_tools.create_event", "args": {"title": "Project Review", "date": "2024-01-18", "time": "14:00"}}, "label": 0}
+{"step": 2, "kind": "observation", "data": {"message": "Meeting created"}, "label": 0}
+{"step": 2, "kind": "model_output", "data": {"text": "Meeting scheduled successfully. Task is complete."}, "label": 0}
+{"step": 2, "kind": "action", "data": {"tool_name": "end_task", "args": {}}, "label": 0}

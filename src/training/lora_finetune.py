@@ -127,13 +127,14 @@ def run_sft(
 	texts = build_sft_texts(read_jsonl(train_jsonl), bos_token=tok.bos_token or "", eos_token=tok.eos_token or "")
 	os.makedirs(output_dir, exist_ok=True)
 
+	# Convert to HF Dataset format
+	from datasets import Dataset
+	dataset = Dataset.from_dict({"text": texts})
+
 	trainer = SFTTrainer(
 		model=model,
-		tokenizer=tok,
-		train_dataset=texts,
-		dataset_text_field=None,	# texts is already a list[str]
-		max_seq_length=max_seq_len,
-		packing=True,
+		processing_class=tok,
+		train_dataset=dataset,
 		args=TrainingArguments(
 			output_dir=output_dir,
 			per_device_train_batch_size=batch_size,
@@ -149,7 +150,8 @@ def run_sft(
 			fp16=(dtype == torch.float16 and device.type != "cpu"),
 			bf16=(dtype == torch.bfloat16),
 			report_to="none"
-		)
+		),
+		formatting_func=lambda x: x["text"]
 	)
 
 	trainer.train()
@@ -214,7 +216,7 @@ def run_ppo(
 		config=ppo_config,
 		model=policy,
 		ref_model=ref_model,
-		tokenizer=tok
+		processing_class=tok  # Changed from tokenizer to tokenizer in TRL 0.9.6+
 	)
 
 	for step in range(steps):

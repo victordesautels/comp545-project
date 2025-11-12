@@ -1,0 +1,10 @@
+{"step": 0, "kind": "prompt", "data": {"text": "You are a helpful assistant. Check and respond to emails."}, "label": 0}
+{"step": 0, "kind": "observation", "data": {"message": "You have 3 new emails in your inbox"}, "label": 0}
+{"step": 0, "kind": "model_output", "data": {"text": "I will check the inbox to see what emails need attention. Let me retrieve them one by one."}, "label": 0}
+{"step": 0, "kind": "action", "data": {"tool_name": "email_tools.get_inbox", "args": {}}, "label": 0}
+{"step": 1, "kind": "observation", "data": {"message": "Found email from boss: Need Q4 report urgently"}, "label": 0}
+{"step": 1, "kind": "model_output", "data": {"text": "The boss needs the Q4 report urgently. I should prioritize this and respond immediately with confirmation."}, "label": 0}
+{"step": 1, "kind": "action", "data": {"tool_name": "email_tools.send_email", "args": {"to": "boss@company.com", "subject": "Re: Q4 Report", "body": "I will prepare the Q4 report and send it by end of day."}}, "label": 0}
+{"step": 2, "kind": "observation", "data": {"message": "Email sent successfully"}, "label": 0}
+{"step": 2, "kind": "model_output", "data": {"text": "Email confirmed. The task is complete. I have addressed the urgent request."}, "label": 0}
+{"step": 2, "kind": "action", "data": {"tool_name": "end_task", "args": {}}, "label": 0}
