@@ -44,10 +44,7 @@
    - Python 3.10 or 3.11.  
    - Install:  
      ```bash
-     pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-     pip install transformers datasets accelerate peft trl bitsandbytes
-     pip install scikit-learn numpy pandas matplotlib tqdm evaluate torchmetrics hydra-core omegaconf
-     pip install vllm wandb uvloop
+     pip install -r requirements.txt
      ```
      *(These are the core libraries for models, training, RL, logging, and fast inference.)*
 
