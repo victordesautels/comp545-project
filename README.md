@@ -44,15 +44,18 @@
    - Python 3.10 or 3.11.  
    - Install:  
      ```bash
-     pip install -r requirements.txt
+     pconda create -n comp545 python=3.11 -y
+    conda activate comp545
+    conda install pytorch torchvision torchaudio -c pytorch -c conda-forge
+    pip install -r requirements-macos.txt
      ```
      *(These are the core libraries for models, training, RL, logging, and fast inference.)*
 
-3. **GPU setup**
+1. **GPU setup**
    - Verify CUDA works: `python -c "import torch; print(torch.cuda.is_available())"`  
    *(Checks your GPU is actually usable.)*
 
-4. **Experiment tracking**
+2. **Experiment tracking**
    - `wandb` project: `shade-evasion-2025` with automatic logging of metrics, configs, and checkpoints.  
    *(So runs are recorded and comparable.)*
 
