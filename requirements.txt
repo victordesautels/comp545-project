@@ -3,8 +3,8 @@
 
 # Core deep learning
 torch>=2.3.0
-torchvision>=0.18.0
-torchaudio>=2.3.0
+# torchvision>=0.18.0  # Not needed for this project (no image data)
+# torchaudio>=2.3.0    # Not needed for this project (no audio data)
 
 # Hugging Face ecosystem
 transformers>=4.46.0
