@@ -3,7 +3,7 @@
 > Goal: fine-tune small open models to evade two monitors (Chain‑of‑Thought and activation probes) on SHADE‑Arena tasks, then measure how often sabotage slips past detection while preserving task competence.
 
 ## References we will lean on (from the proposal)
-- SHADE‑Arena sabotage benchmark and monitoring setups
+- SHADE‑Arena sabotage benchmark and monitoring setups (https://github.com/safety-research/SHADE-Arena)
 - CoT monitoring papers showing brittleness under adversarial prompting/training
 - Linear probe papers for activation-based detection
 - Background on deceptive “sleeper” behaviors and oversight fragility

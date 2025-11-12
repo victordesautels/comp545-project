@@ -1,0 +1,19 @@
+# Ignore model checkpoints and large weight files
+models/
+outputs/
+checkpoints/
+*.bin
+*.pt
+*.safetensors
+
+# Hugging Face cache
+~/.cache/
+huggingface/
+huggingface_hub/
+__pycache__/
+*.log
+
+# Python environment
+.env
+.venv
+*.egg-info/
