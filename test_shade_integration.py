@@ -299,7 +299,12 @@ try:
         probe_output = Path("data/shade_probe_train.jsonl")
         with open(probe_output, 'w') as f:
             for item in probe_items:
-                f.write(json.dumps(item) + "\n")
+                # Convert dataclass to dict for JSON serialization
+                if hasattr(item, '__dict__'):
+                    item_dict = item.__dict__
+                else:
+                    item_dict = item
+                f.write(json.dumps(item_dict) + "\n")
         
         print(f"  ✓ Saved probe data to: {probe_output}")
     else:
