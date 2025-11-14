@@ -14,6 +14,9 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# Import FunctionsRuntime for tool execution
+from utils.functions_runtime import FunctionsRuntime, make_function
+
 # Make top-level SHADE dirs importable (they all expect to be on the path):
 # Note: SHADE codebase uses absolute imports like "from utils.strenum import StrEnum"
 # so we ensure the root is on sys.path (already done above)
@@ -131,7 +134,7 @@ class ShadeArenaEnv:
         self.universe_root = ROOT / "universe_related_stuff"
         self.tools_root = ROOT / "tools"
 
-        task_def = _load_task_definition(task_name) if task_name else None
+        self.task_def = _load_task_definition(task_name) if task_name else None
         EnvCls = _get_env_class(env_name)
 
         # SHADE environments have a create() class method
@@ -141,45 +144,84 @@ class ShadeArenaEnv:
             # Fallback: try to construct with task_definition
             self.env = _safe_construct(
                 EnvCls,
-                task_definition=task_def,
+                task_definition=self.task_def,
             )
 
         self._done = False
         self._score = {"main": None, "side": None}
         self._evaluator = _get_evaluator(task_name) if task_name else None
+        self._step_count = 0
+        
+        # Create FunctionsRuntime with environment tools
+        tools_list = []
+        if hasattr(self.env, 'available_tools'):
+            tools_list = self.env.available_tools
+        elif hasattr(self.env, '_tools'):
+            tools_list = self.env._tools
+        
+        # Convert tool functions to Function objects
+        function_objs = []
+        for tool in tools_list:
+            try:
+                function_objs.append(make_function(tool))
+            except Exception:
+                # Skip tools that can't be converted
+                pass
+        
+        self.runtime = FunctionsRuntime(function_objs)
 
     def reset(self) -> Dict[str, Any]:
         self._done = False
         self._score = {"main": None, "side": None}
-        if hasattr(self.env, "reset"):
+        self._step_count = 0
+        
+        # SHADE environments don't have a traditional reset() that returns observations
+        # Instead, the initial observation comes from the task definition's user_query
+        obs = None
+        if self.task_def and hasattr(self.task_def, 'user_query'):
+            obs = self.task_def.user_query
+        elif hasattr(self.env, "reset"):
             obs = self.env.reset()
-        else:
-            obs = None
+        
         return {"observation": obs}
 
     def step(self, action: Dict[str, Any]) -> Dict[str, Any]:
         """
         action example:
           {"tool_name": "email_tools.send_email", "args": {"to": "...", "body": "..."}}
-        The exact shape depends on the underlying env; we forward it.
+        Uses FunctionsRuntime to execute the tool and return the result.
         """
-        result = self.env.step(action) if hasattr(self.env, "step") else None
-
-        # Normalize return forms:
-        obs, done_flag = None, None
-        if isinstance(result, tuple) and len(result) >= 2:
-            obs, done_flag = result[0], bool(result[1])
+        self._step_count += 1
+        
+        # Extract tool name and args from action
+        tool_name = action.get("tool_name", "")
+        args = action.get("args", {})
+        
+        # Check if this is the end_task tool
+        if tool_name == "end_task":
+            self._done = True
+            obs = "Task completed."
         else:
-            obs = result
-            # Try to query 'done' from the env
-            for attr in ["done", "is_done", "terminated", "is_terminated"]:
-                if hasattr(self.env, attr):
-                    val = getattr(self.env, attr)
-                    done_flag = bool(val() if callable(val) else val)
-                    break
+            # Execute the tool using FunctionsRuntime
+            result, error = self.runtime.run_function(
+                env=self.env,
+                function=tool_name,
+                kwargs=args
+            )
+            
+            if error:
+                obs = f"Error: {error}"
+            else:
+                # Convert result to string representation
+                if hasattr(result, 'model_dump'):
+                    # Pydantic model
+                    obs = str(result.model_dump())
+                elif hasattr(result, '__dict__'):
+                    obs = str(result.__dict__)
+                else:
+                    obs = str(result)
 
-        self._done = bool(done_flag)
-
+        # Evaluate if done
         if self._done and self._evaluator is not None and self.task_name is not None:
             transcript = _get_transcript(self.env)
             main_score = None
@@ -210,3 +252,30 @@ class ShadeArenaEnv:
     @property
     def score(self) -> Dict[str, Any]:
         return self._score
+    
+    def get_available_tools(self) -> list[Dict[str, Any]]:
+        """Get list of available tools in agent-friendly format"""
+        tools_list = []
+        for func_name, func in self.runtime.functions.items():
+            tool_dict = {
+                "name": func_name,
+                "description": func.description,
+                "args_schema": {}
+            }
+            
+            # Extract parameter schema
+            if func.parameters:
+                schema = func.parameters.model_json_schema()
+                props = schema.get("properties", {})
+                required = schema.get("required", [])
+                
+                for param_name, param_info in props.items():
+                    tool_dict["args_schema"][param_name] = {
+                        "type": param_info.get("type", "string"),
+                        "description": param_info.get("description", ""),
+                        "required": param_name in required
+                    }
+            
+            tools_list.append(tool_dict)
+        
+        return tools_list

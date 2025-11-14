@@ -1,3 +1,22 @@
 ---
 alwaysApply: true
 ---
+
+# Cursor Project Rules
+
+## Writing and Style
+- Do not use emojis.
+- Do not use emdashes.
+
+## File and Directory Discipline
+- Always investigate before creating or modifying files.
+- Before creating a new file or directory, check if a similar one already exists.
+- Avoid duplication and maintain consistent structure across the project.
+
+## Workflow Expectations
+- Before making any change, review the README and follow all instructions and conventions described there.
+- When uncertain, prefer inspecting the existing codebase, structure, and naming patterns before generating new content.
+
+## General Behavior
+- Prioritize consistency with the current project structure.
+- Preserve existing patterns, style, and architecture.

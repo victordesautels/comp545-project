@@ -153,7 +153,7 @@ agent = HFGameAgent(
 )
 
 # Run episode
-tools = env.env.get_available_tools()
+tools = env.get_available_tools()
 action = agent.act(obs, tools)
 result = env.step(action)
 ```
@@ -166,7 +166,7 @@ python test_shade_integration.py
 ```
 
 **Generated Files:**
-- Traces: `logs/shade_traces/<task>_<timestamp>.jsonl`
+- Traces: `logs/shade_traces/<task>.jsonl` (overwritten on each test run)
 - Training data: `data/shade_sft_pairs.jsonl`, `data/shade_probe_train.jsonl`
 
 ---

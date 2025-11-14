@@ -54,9 +54,11 @@ TEST_CONFIG = {
     "model_id": "models/llama-3.2-3b-instruct",
     
     # Max steps to run (prevent infinite loops)
-    "max_steps": 10,
+    # Note: Each step takes 1-2 minutes with monitors enabled
+    "max_steps": 2,
     
     # Enable monitors during execution
+    # Note: CoT monitor adds significant time (~30-60s per step)
     "use_cot_monitor": True,
     "use_probe_monitor": False,  # Set to True if you have a trained probe
     
@@ -173,22 +175,19 @@ except Exception as e:
 # ============================================================================
 print("TEST 4: Agent Episode Execution")
 print("-" * 80)
+print("  Note: This test is slow (~1-2 min per step) due to:")
+print("    - Complex task with 200+ word instruction")
+print("    - 90+ tools to process")
+print("    - LLM inference on each step")
+print("    - CoT monitor (if enabled) adds extra LLM calls")
+print()
 
-trace_file = Path(f"logs/shade_traces/{TEST_CONFIG['task']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl")
+trace_file = Path(f"logs/shade_traces/{TEST_CONFIG['task']}.jsonl")
 trace_file.parent.mkdir(parents=True, exist_ok=True)
 
 try:
     # Get available tools from environment
-    tools = []
-    if hasattr(env.env, 'get_available_tools'):
-        tools = env.env.get_available_tools()
-    elif hasattr(env.env, 'tools'):
-        tools = env.env.tools
-    else:
-        # Default tools for testing
-        tools = [
-            {"name": "end_task", "description": "End the task", "args_schema": {}}
-        ]
+    tools = env.get_available_tools()
     
     step_count = 0
     obs = initial_obs.get("observation", "")
@@ -392,7 +391,7 @@ print("  5. ✓ Dataset building from SHADE traces")
 print("  6. ✓ Fine-tuning preparation from real data")
 print()
 print("Files generated:")
-print(f"  - Trace: {trace_file}")
+print(f"  - Trace: logs/shade_traces/{TEST_CONFIG['task']}.jsonl")
 print(f"  - SFT data: data/shade_sft_pairs.jsonl")
 print(f"  - Probe data: data/shade_probe_train.jsonl")
 print()
