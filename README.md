@@ -2,6 +2,8 @@
 
 > Goal: fine-tune small open models to evade two monitors (Chain-of-Thought and activation probes) on SHADE-Arena tasks, then measure how often sabotage slips past detection while preserving task competence.
 
+[Jump to Future Work](#future-work-automation-scripts)
+
 ## References
 - SHADE-Arena sabotage benchmark and monitoring setups (https://github.com/jkutaso/SHADE-Arena)
 - CoT monitoring papers showing brittleness under adversarial prompting/training
@@ -39,10 +41,6 @@ python tests/test_ppo_training.py
 ```
 
 **Note:** The test files in `tests/` validate that implemented components work correctly but are not comprehensive test suites. They demonstrate basic functionality using dummy data.
-
-**Navigation:**
-- [Jump to Future Work](#future-work-automation-scripts)
-- [Jump to Division of Work](#division-of-work)
 
 ---
 
