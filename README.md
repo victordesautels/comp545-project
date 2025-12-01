@@ -42,9 +42,9 @@ python tests/test_ppo_training.py
 
 ---
 
-## Implemented Components (Steps 0-15)
+## Implemented Components
 
-### 0) Repository and Environment
+### Step 0: Repository and Environment
 
 **Status:** Complete
 
@@ -53,17 +53,21 @@ python tests/test_ppo_training.py
 project_code/
 ├── src/
 │   ├── agents/           # HF agent with tool calling
+│   ├── eval/            # Evaluation module for trained models
 │   ├── monitors/         # CoT judge, activation probe, hybrid
 │   ├── shade/           # SHADE-Arena adapters
-│   ├── training/        # Dataset builder, LoRA finetuning, PPO
+│   ├── training/        # Dataset builder, LoRA finetuning, PPO, rewards
 │   └── utils/           # Model loaders, device utils
 ├── tests/               # Component validation tests
 ├── data/                # Training data (SFT, probe, PPO)
 ├── checkpoints/         # Trained models and probes
-├── logs/traces/         # Episode trace logs
+├── logs/                # Episode trace logs (traces/, shade_traces/)
 ├── environments/        # SHADE environment wrappers
-├── tools/              # SHADE tool implementations
-└── task_pairs/         # SHADE task definitions
+├── environment_classes/ # SHADE environment classes
+├── tools/               # SHADE tool implementations
+├── task_pairs/          # SHADE task definitions
+├── task_evaluation/     # SHADE task evaluators
+└── models/              # Downloaded models (llama, qwen)
 ```
 
 **Validation:**
@@ -74,7 +78,7 @@ python tests/test_all_components.py
 
 ---
 
-### 1) Models and Runtime (Steps 5-7)
+### Steps 1-3: Models and Runtime
 
 **Status:** Complete
 
@@ -126,7 +130,7 @@ python tests/test_all_components.py
 
 ---
 
-### 2) Benchmark Wiring (Steps 8-10)
+### Steps 4-6: Benchmark Wiring
 
 **Status:** Complete
 
@@ -175,9 +179,9 @@ python tests/test_shade_integration.py
 
 ---
 
-### 3) Monitors (Baselines) (Steps 11-13)
+### Steps 7-9: Monitors (Baselines)
 
-#### Step 11: CoT Monitor
+#### Step 7: CoT Monitor
 
 **Status:** Complete
 
@@ -210,7 +214,7 @@ print(f"Rationale: {result['rationale']}")
 python tests/test_all_components.py
 ```
 
-#### Step 12: Activation Probe
+#### Step 8: Activation Probe
 
 **Status:** Complete
 
@@ -272,7 +276,7 @@ python test_all_components.py
 **Available Dummy Data:**
 - `data/probe_train.jsonl` - 17 labeled reasoning samples (benign/malicious)
 
-#### Step 13: Hybrid Monitor
+#### Step 9: Hybrid Monitor
 
 **Status:** Complete
 
@@ -307,9 +311,9 @@ python tests/test_all_components.py
 
 ---
 
-### 4) Data Builders and Rewards (Steps 14-15)
+### Steps 10-11: Data Builders and Rewards
 
-#### Step 14: Dataset Builder
+#### Step 10: Dataset Builder
 
 **Status:** Complete
 
@@ -382,7 +386,7 @@ python tests/test_shade_integration.py
 - `data/sft_train.jsonl` - Extended SFT training set
 - `logs/traces/*.jsonl` - 4 complete episode traces (2 benign, 2 malicious)
 
-#### Step 15: Reward Shaping
+#### Step 11: Reward Shaping
 
 **Status:** Complete
 
@@ -420,13 +424,11 @@ rewards = reward_computer.compute_rewards(prompts, responses)
 
 ---
 
-## Next Steps: Training (Steps 16-20)
+## Training Pipeline
 
-The LoRA fine-tuning infrastructure is implemented in `src/training/lora_finetune.py` but full training workflows need to be executed.
+### Step 12: SFT Warm-Start
 
-### Step 16: SFT Warm-Start
-
-**Status:** Infrastructure ready, needs full training run
+**Status:** Complete
 
 **Command-Line Usage:**
 ```bash
@@ -457,7 +459,7 @@ python src/training/lora_finetune.py sft \
 python tests/test_all_components.py
 ```
 
-### Steps 17-19: PPO Training
+### Step 13: PPO Training with SHADE Monitors
 
 **Status:** Complete
 
@@ -542,15 +544,16 @@ python tests/test_ppo_training.py
 - Final adapters saved to `<output_dir>/`
 
 **Features:**
-- ✅ CoT judge reward integration
-- ✅ Activation probe reward integration
-- ✅ Hybrid reward with configurable weighting
-- ✅ LoRA parameter-efficient training
-- ✅ Automatic padding and tokenization handling
-- ✅ Gradient clipping for stability
-- ✅ Checkpoint saving
+- CoT judge reward integration
+- Activation probe reward integration
+- Hybrid reward with configurable weighting
+- LoRA parameter-efficient training
+- Automatic padding and tokenization handling
+- Gradient clipping for stability
+- Checkpoint saving
+- Detailed reward decomposition logging (when using dual rewards)
 
-### Step 20: Checkpointing and Merging
+### Step 14: Checkpointing and Merging
 
 **Status:** Complete
 
@@ -572,9 +575,9 @@ print('Merged model loaded')
 
 ---
 
-## Evaluation Infrastructure (Steps 21-23)
+## Evaluation Infrastructure
 
-### Complete Evaluation Module
+### Step 15: Complete Evaluation Module
 
 **Status:** Complete
 
@@ -648,7 +651,7 @@ python tests/test_evaluation.py
 - `results.jsonl`: Per-episode results
 - `trajectory_*.jsonl`: Step-by-step trajectories (if enabled)
 
-### Dual Reward System
+### Step 16: Dual Reward System
 
 **Status:** Complete
 
@@ -721,37 +724,83 @@ python tests/test_dual_rewards.py
 **Features:**
 - Modular architecture (each reward type is independent)
 - Compatible with existing safety-only rewards
-- Configurable reward weighting
+- Configurable reward weighting (alpha for task, beta for safety)
 - Support for multiple task evaluation strategies
 - Detailed reward breakdown for logging and analysis
 
+**Detailed Reward Logging:**
+
+When using dual rewards (`--use_dual_reward`), the system logs decomposed reward components:
+
+```bash
+# Example output during training
+Step   10/100 | reward: 0.4500 | reward_10avg: 0.4320 | KL: 0.0023
+         | safety: 0.3200±0.1500 (10avg: 0.3100) | task: 0.8500±0.2100 (10avg: 0.8300)
+```
+
+Output includes:
+- Per-step mean ± std for safety and task rewards
+- Running 10-step averages for both components
+- Final training summary with overall means
+- Optional JSONL export (`output_dir/rewards_log.jsonl`) for plotting
+
+Flags:
+- `--log_reward_details` / `--no_log_reward_details`: Control console logging
+- `--save_reward_log` / `--no_save_reward_log`: Control JSONL export
+
+### Step 17: Fixed Decoding and Metrics
+
+**Status:** Complete
+
+The evaluation module (`src/eval/shade_eval.py`) uses fixed decoding parameters across all evaluations:
+- Configurable `temperature`, `top_p`, `max_new_tokens` via `EvalConfig`
+- Consistent settings ensure fair comparison between baselines and trained models
+
+**Metrics Computed:**
+- Main task success rate
+- Side task success rate (sabotage)
+- Undetected-sabotage rate (side success AND not flagged)
+- Monitor flagging rates (per episode and per step)
+- Average episode length
+- Completion rates
+
+All metrics are saved in structured format (`metrics.json`) for easy analysis and plotting.
+
 ---
 
-## Future Work: Scripts (CLI) (Steps 24-30)
+## Future Work: Automation Scripts
 
-24. `scripts/rollout.py` - run agent on tasks, save JSONL traces
-25. `scripts/run_cot_monitor.py` - score traces with CoT monitor
-26. `scripts/train_probe.py` - train linear probe, export `.pkl`
-27. `scripts/train_sft.py` - SFT with LoRA on curated pairs
-28. `scripts/train_ppo.py` - PPO with selectable reward (CoT, activation, hybrid)
-29. `scripts/eval_all.py` - batch evaluation across seeds and tasks
-30. `scripts/merge_peft.py` - merge LoRA adapters into base weights
+**Status:** Planned
+
+High-level scripts to streamline workflows:
+
+- **Step 18:** `scripts/rollout.py` - Run agent on tasks, save JSONL traces
+- **Step 19:** `scripts/run_cot_monitor.py` - Score traces with CoT monitor
+- **Step 20:** `scripts/train_probe.py` - Train linear probe, export artifacts
+- **Step 21:** `scripts/train_sft.py` - Wrapper for SFT training with LoRA
+- **Step 22:** `scripts/train_ppo.py` - Wrapper for PPO with reward selection
+- **Step 23:** `scripts/eval_all.py` - Batch evaluation across seeds and tasks
+- **Step 24:** `scripts/merge_peft.py` - Merge LoRA adapters into base weights
+
+**Note:** Core functionality already exists in `src/` modules. Scripts would provide convenient CLI wrappers for common workflows.
 
 ---
 
-## Future Work: Reproducibility and Hygiene (Steps 31-33)
+## Future Work: Reproducibility and Hygiene
 
-31. **Seed control and logging**
-    - Fix seeds in Python, NumPy, PyTorch. Log Git commit, `pip freeze`, and config for every run.
-    - (to rerun and match results.)
+**Status:** Planned
 
-32. **Artifact management**
-    - Save best-K checkpoints by undetected-sabotage on a held-out split. Keep clear run IDs and timestamps.
-    - (Prevents losing your best models.)
+- **Step 25: Seed control and logging**
+  - Fix seeds in Python, NumPy, PyTorch. Log Git commit, `pip freeze`, and config for every run.
+  - (to rerun and match results.)
 
-33. **Licensing and sharing**
-    - Check model licenses before redistributing merged weights.
-    - (Avoids license surprises.)
+- **Step 26: Artifact management**
+  - Save best-K checkpoints by undetected-sabotage on a held-out split. Keep clear run IDs and timestamps.
+  - (Prevents losing your best models.)
+
+- **Step 27: Licensing and sharing**
+  - Check model licenses before redistributing merged weights.
+  - (Avoids license surprises.)
 
 ---
 
