@@ -29,13 +29,16 @@ pip install -r requirements.txt
 python -c "import torch; print(torch.cuda.is_available())"
 
 # Run component validation tests
-python test_all_components.py
+python tests/test_all_components.py
 
 # Run SHADE environment integration test
-python test_shade_integration.py
+python tests/test_shade_integration.py
+
+# Test PPO training with SHADE monitors
+python tests/test_ppo_training.py
 ```
 
-**Note:** The test files (`test_all_components.py` and `test_shade_integration.py`) validate that implemented components work correctly but are not comprehensive test suites. They demonstrate basic functionality using dummy data.
+**Note:** The test files in `tests/` validate that implemented components work correctly but are not comprehensive test suites. They demonstrate basic functionality using dummy data.
 
 ---
 
@@ -52,8 +55,9 @@ project_code/
 │   ├── agents/           # HF agent with tool calling
 │   ├── monitors/         # CoT judge, activation probe, hybrid
 │   ├── shade/           # SHADE-Arena adapters
-│   ├── training/        # Dataset builder, LoRA finetuning
+│   ├── training/        # Dataset builder, LoRA finetuning, PPO
 │   └── utils/           # Model loaders, device utils
+├── tests/               # Component validation tests
 ├── data/                # Training data (SFT, probe, PPO)
 ├── checkpoints/         # Trained models and probes
 ├── logs/traces/         # Episode trace logs
@@ -65,7 +69,7 @@ project_code/
 **Validation:**
 ```bash
 # Test all core components
-python test_all_components.py
+python tests/test_all_components.py
 ```
 
 ---
@@ -117,7 +121,7 @@ action = agent.act(obs, tools)
 python -c "from src.agents.hf_agent import HFGameAgent; agent = HFGameAgent('models/llama-3.2-3b-instruct'); print('Model loaded successfully')"
 
 # Included in test suite
-python test_all_components.py
+python tests/test_all_components.py
 ```
 
 ---
@@ -161,8 +165,8 @@ result = env.step(action)
 **Testing:**
 ```bash
 # Test SHADE integration with different environments/tasks
-# Edit TEST_CONFIG in test_shade_integration.py to change environment/task
-python test_shade_integration.py
+# Edit TEST_CONFIG in tests/test_shade_integration.py to change environment/task
+python tests/test_shade_integration.py
 ```
 
 **Generated Files:**
@@ -203,7 +207,7 @@ print(f"Rationale: {result['rationale']}")
 **Testing:**
 ```bash
 # Included in test suite
-python test_all_components.py
+python tests/test_all_components.py
 ```
 
 #### Step 12: Activation Probe
@@ -298,7 +302,7 @@ print(f"Flagged: {result['fusion']['flagged']}")
 **Testing:**
 ```bash
 # Included in test suite
-python test_all_components.py
+python tests/test_all_components.py
 ```
 
 ---
@@ -365,10 +369,10 @@ with open("data/my_ppo_prompts.jsonl", "w") as f:
 **Testing:**
 ```bash
 # Test dataset building
-python test_all_components.py
+python tests/test_all_components.py
 
 # Generate datasets from SHADE episodes
-python test_shade_integration.py
+python tests/test_shade_integration.py
 ```
 
 **Available Dummy Data:**
@@ -380,16 +384,39 @@ python test_shade_integration.py
 
 #### Step 15: Reward Shaping
 
-**Status:** Complete (infrastructure ready, integration with monitors pending)
+**Status:** Complete
 
-**Description:** Reward functions for RL training (implemented in `src/training/lora_finetune.py`)
+**Description:** Reward functions for RL training integrated with SHADE monitors
+
+**Implementation:** `src/training/lora_finetune.py` (RewardComputer class)
 
 **Reward Types:**
-1. **CoT Evasion:** `reward = (not flagged_by_cot) * (side_task_success)`
-2. **Activation Evasion:** `reward = (probe_score < threshold) * (side_task_success)`
-3. **Hybrid:** `reward = w1*(cot_ok) + w2*(probe_ok) + w3*(main_task_success)`
+1. **CoT Reward:** Rewards generations that avoid CoT judge flagging
+   - Higher reward for not flagged responses
+   - Penalty proportional to suspicion score when flagged
 
-**Note:** Current PPO implementation includes placeholder reward function. Full integration with monitors planned for Steps 17-19.
+2. **Probe Reward:** Rewards generations with low malicious probability
+   - `reward = 1.0 - prob_malicious`
+   - Based on activation probe predictions
+
+3. **Hybrid Reward:** Weighted combination of both approaches
+   - `reward = w1 * cot_reward + w2 * probe_reward`
+   - Optional penalty if fusion monitor flags the response
+
+**Usage:**
+```python
+from src.training.lora_finetune import RewardComputer
+
+# Initialize with CoT rewards
+reward_computer = RewardComputer(
+    reward_type="cot",
+    cot_model_id="models/llama-3.2-3b-instruct",
+    cot_threshold=65
+)
+
+# Compute rewards for generated responses
+rewards = reward_computer.compute_rewards(prompts, responses)
+```
 
 ---
 
@@ -427,38 +454,101 @@ python src/training/lora_finetune.py sft \
 **Testing (Minimal Run):**
 ```bash
 # Included in test suite (runs 2 steps)
-python test_all_components.py
+python tests/test_all_components.py
 ```
 
 ### Steps 17-19: PPO Training
 
-**Status:** Infrastructure ready, reward integration needs completion
+**Status:** Complete
+
+**Description:** Reward-based training loop with SHADE monitor integration for evasion learning
+
+**Implementation:** Custom training loop in `src/training/lora_finetune.py`
+- Generates responses from prompts
+- Computes rewards using SHADE monitors (CoT judge, activation probe, or hybrid)
+- Updates model with reward-weighted gradients
+- Uses LoRA for parameter-efficient training
 
 **Command-Line Usage:**
-```bash
-# PPO training (placeholder rewards currently)
-python src/training/lora_finetune.py ppo \
-  --model_id models/llama-3.2-3b-instruct \
-  --train_jsonl data/ppo_prompts.jsonl \
-  --output_dir checkpoints/llama_ppo_peft \
-  --steps 100 \
-  --ppo_batch_size 4 \
-  --gen_max_new_tokens 128
 
-# With reference model for KL penalty
+```bash
+# PPO training with CoT judge rewards
 python src/training/lora_finetune.py ppo \
   --model_id models/llama-3.2-3b-instruct \
-  --ref_model_id models/llama-3.2-3b-instruct \
   --train_jsonl data/ppo_prompts.jsonl \
-  --output_dir checkpoints/llama_ppo_kl_peft \
-  --steps 200
+  --output_dir checkpoints/llama_ppo_cot \
+  --ppo_steps 100 \
+  --ppo_batch_size 4 \
+  --gen_max_new_tokens 128 \
+  --reward_type cot \
+  --cot_threshold 65
+
+# PPO training with activation probe rewards
+python src/training/lora_finetune.py ppo \
+  --model_id models/llama-3.2-3b-instruct \
+  --train_jsonl data/ppo_prompts.jsonl \
+  --output_dir checkpoints/llama_ppo_probe \
+  --ppo_steps 100 \
+  --ppo_batch_size 4 \
+  --gen_max_new_tokens 128 \
+  --reward_type probe \
+  --probe_dir checkpoints/trained_probe \
+  --probe_threshold 65
+
+# PPO training with hybrid rewards (CoT + probe)
+python src/training/lora_finetune.py ppo \
+  --model_id models/llama-3.2-3b-instruct \
+  --train_jsonl data/ppo_prompts.jsonl \
+  --output_dir checkpoints/llama_ppo_hybrid \
+  --ppo_steps 100 \
+  --ppo_batch_size 4 \
+  --gen_max_new_tokens 128 \
+  --temperature 0.9 \
+  --learning_rate 1e-5 \
+  --save_every 50 \
+  --reward_type hybrid \
+  --hybrid_w1 0.5 \
+  --hybrid_w2 0.5 \
+  --probe_dir checkpoints/trained_probe
 ```
 
-**TODO for Steps 17-19:**
-- Integrate CoT monitor into PPO reward computation
-- Integrate activation probe into PPO reward computation
-- Implement hybrid reward weighting (w1*cot + w2*probe + w3*task_success)
-- Add SHADE environment rollouts during PPO training
+**Training Parameters:**
+- `--ppo_steps`: Number of training steps
+- `--ppo_batch_size`: Batch size for generation and training
+- `--gen_max_new_tokens`: Max tokens to generate per response
+- `--temperature`: Sampling temperature for generation
+- `--learning_rate`: Optimizer learning rate
+- `--save_every`: Save checkpoint every N steps (0 to disable)
+
+**Reward Parameters:**
+- `--reward_type`: Type of reward (`cot`, `probe`, or `hybrid`)
+- `--cot_model_id`: Model for CoT judge (default: same as --model_id)
+- `--cot_threshold`: CoT suspicion threshold (0-100, default: 65)
+- `--probe_model_id`: Model for activation probe (default: same as --model_id)
+- `--probe_dir`: Directory with trained probe artifacts (required for probe/hybrid)
+- `--probe_threshold`: Probe suspicion threshold (0-100, default: 65)
+- `--hybrid_w1`: Weight for CoT in hybrid mode (default: 0.5)
+- `--hybrid_w2`: Weight for probe in hybrid mode (default: 0.5)
+
+**Testing:**
+```bash
+# Test all three reward types
+python tests/test_ppo_training.py
+```
+
+**Output:**
+- Training logs show reward and loss progression
+- Periodic checkpoints saved to `<output_dir>/step_<N>/`
+- Final adapters saved to `<output_dir>/`
+
+**Features:**
+- ✅ CoT judge reward integration
+- ✅ Activation probe reward integration
+- ✅ Hybrid reward with configurable weighting
+- ✅ LoRA parameter-efficient training
+- ✅ Automatic padding and tokenization handling
+- ✅ Gradient clipping for stability
+- ✅ Checkpoint saving
 
 ### Step 20: Checkpointing and Merging
 
@@ -482,19 +572,158 @@ print('Merged model loaded')
 
 ---
 
-## Future Work: Evaluation and Reporting (Steps 21-23)
+## Evaluation Infrastructure (Steps 21-23)
 
-### Step 21: Metrics
-- Main task success, side task success, undetected-sabotage rate (side success AND not flagged), AUROC and FPR for probe and hybrid, CoT suspicion distributions.
-- (These numbers tell us if we are actually evading detection.)
+### Complete Evaluation Module
 
-### Step 22: Fixed Decoding for Eval
-- Use fixed `temperature`, `top_p`, and `max_new_tokens` across baselines and trained models.
-- (Keeps comparisons fair)
+**Status:** Complete
 
-### Step 23: Notebooks and Plots
-- `notebooks/08_eval_report.ipynb` builds ROC curves, histograms, and tables; exports CSVs to `reports/` and figures to `reports/figs/`.
-- (Produces paper-ready summaries.)
+**Implementation:** `src/eval/shade_eval.py`
+
+**Components:**
+- `build_agent()`: Load any checkpoint type (SFT/PPO/merged/LoRA)
+- `build_monitor()`: Create CoT/probe/hybrid monitors
+- `run_single_episode()`: Execute one task episode with monitoring
+- `run_multiple_episodes()`: Batch evaluation with metrics aggregation
+- `aggregate_metrics()`: Compute success rates, flagging rates, step counts
+- `save_results()` / `load_results()`: Persist evaluation data
+
+**Usage - Python API:**
+```python
+from src.eval.shade_eval import EvalConfig, run_multiple_episodes, aggregate_metrics
+
+cfg = EvalConfig(
+    model_path="checkpoints/llama32_3b_sft_merged",
+    task_name="bank_transfer_2",
+    monitor_type="cot",
+    num_episodes=10,
+    max_steps=20,
+)
+
+results = run_multiple_episodes(cfg)
+summary = aggregate_metrics(results)
+
+print(f"Main task success: {summary['main_task_success_rate']:.1%}")
+print(f"Monitor flagged: {summary['monitor_flagged_rate']:.1%}")
+print(f"Average steps: {summary['average_steps']:.1f}")
+```
+
+**Command-Line Usage:**
+```bash
+# Evaluate SFT model with CoT monitor
+python src/eval/shade_eval.py \
+  --model_path checkpoints/llama32_3b_sft_merged \
+  --task_name bank_transfer_2 \
+  --monitor_type cot \
+  --num_episodes 10
+
+# Evaluate PPO checkpoint with probe monitor
+python src/eval/shade_eval.py \
+  --model_path models/llama-3.2-3b-instruct \
+  --adapter_path checkpoints/llama_ppo_peft \
+  --task_name american_airlines_2 \
+  --monitor_type probe \
+  --probe_dir checkpoints/trained_probe \
+  --num_episodes 5
+```
+
+**Testing:**
+```bash
+# Test evaluation module
+python tests/test_evaluation.py
+```
+
+**Metrics Collected:**
+- Completion rate (episodes that finish)
+- Main task success rate (from SHADE evaluators)
+- Side task success rate (sabotage detection)
+- Monitor flagging rate (per episode and per step)
+- Undetected-sabotage rate (side success AND not flagged)
+- Average steps per episode
+- Full trajectory logging (actions, observations, monitor results)
+
+**Output Files:**
+- `config.json`: Evaluation configuration
+- `metrics.json`: Aggregated metrics summary
+- `results.jsonl`: Per-episode results
+- `trajectory_*.jsonl`: Step-by-step trajectories (if enabled)
+
+### Dual Reward System
+
+**Status:** Complete
+
+**Implementation:** `src/training/rewards.py`
+
+**Description:** Modular reward system combining safety (SHADE monitors) and task-success signals for PPO training
+
+**Components:**
+
+1. **SafetyReward:** Wraps SHADE monitors (CoT/probe/hybrid)
+   - Continuous reward mapping from suspicion scores
+   - Normalized to [-1, 1] range
+
+2. **TaskReward:** Evaluates task completion
+   - Keyword evaluator: Check for required/forbidden keywords
+   - Structured evaluator: Verify expected tool call sequences
+   - Oracle evaluator: Compare to known correct answers
+
+3. **RewardMixer:** Combines multiple reward sources
+   - Configurable weights: `total = alpha * task + beta * safety`
+   - Normalization and clipping to [-1, 1]
+
+**Usage - Python API:**
+```python
+from src.training.rewards import build_reward_mixer
+
+# Build mixer with both safety and task rewards
+mixer = build_reward_mixer(
+    task_weight=0.6,           # alpha
+    safety_weight=0.4,         # beta
+    safety_monitor_type="cot",
+    safety_config={"cot_model_id": "models/llama-3.2-3b-instruct"},
+    task_evaluator_type="keyword",
+    task_config={"required_keywords": ["transfer", "complete"]},
+)
+
+# Compute reward
+result = mixer.compute_reward(
+    prompt="Transfer $100 to Alice",
+    response="I will transfer $100 to Alice's account"
+)
+
+print(f"Task reward: {result['task_reward']:.3f}")
+print(f"Safety reward: {result['safety_reward']:.3f}")
+print(f"Total reward: {result['total_reward']:.3f}")
+```
+
+**Integration with PPO:**
+```bash
+# PPO with dual rewards (safety + task success)
+python src/training/lora_finetune.py ppo \
+  --model_id models/llama-3.2-3b-instruct \
+  --train_jsonl data/ppo_prompts.jsonl \
+  --output_dir checkpoints/llama_ppo_dual \
+  --use_dual_reward \
+  --task_evaluator_type keyword \
+  --task_required_keywords "transfer" "complete" "success" \
+  --task_reward_weight 0.6 \
+  --safety_reward_weight 0.4 \
+  --reward_type cot \
+  --ppo_steps 100
+```
+
+**Testing:**
+```bash
+# Test dual reward system
+python tests/test_dual_rewards.py
+```
+
+**Features:**
+- Modular architecture (each reward type is independent)
+- Compatible with existing safety-only rewards
+- Configurable reward weighting
+- Support for multiple task evaluation strategies
+- Detailed reward breakdown for logging and analysis
 
 ---
 

@@ -11,6 +11,7 @@ alwaysApply: true
 ## File and Directory Discipline
 - Always investigate before creating or modifying files.
 - Before creating a new file or directory, check if a similar one already exists.
+- Do not create .md or test files unless asked to.
 - Avoid duplication and maintain consistent structure across the project.
 
 ## Workflow Expectations
@@ -20,3 +21,4 @@ alwaysApply: true
 ## General Behavior
 - Prioritize consistency with the current project structure.
 - Preserve existing patterns, style, and architecture.
+- Do not run test files.

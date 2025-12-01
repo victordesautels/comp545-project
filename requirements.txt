@@ -12,7 +12,7 @@ huggingface-hub>=0.26.0
 peft>=0.13.2
 datasets>=3.0.0
 accelerate>=0.33.0
-trl>=0.9.6
+trl==0.8.6
 
 # Evaluation and metrics
 evaluate>=0.4.2
