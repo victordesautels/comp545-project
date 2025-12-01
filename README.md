@@ -267,7 +267,7 @@ print(scores)  # [[benign_prob, malicious_prob], ...]
 **Testing:**
 ```bash
 # Train and test probe
-python test_all_components.py
+python tests/test_all_components.py
 ```
 
 **Pre-trained Probes:**
@@ -346,27 +346,37 @@ with open("data/my_sft_data.jsonl", "w") as f:
 
 **Usage - Build Probe Data:**
 ```python
-from src.training.dataset_builder import build_probe_text_Steps
+from src.training.dataset_builder import build_probe_text_items
 
-probe_Steps = build_probe_text_Steps(
+probe_items = build_probe_text_items(
     episode,
     label_by_episode=True  # Use episode-level label or per-step labels
 )
 
 # Save probe training data
 with open("data/my_probe_data.jsonl", "w") as f:
-    for Step in probe_Steps:
-        f.write(json.dumps({"text": Step.text, "label": Step.label}) + "\n")
+    for item in probe_items:
+        f.write(json.dumps({"text": item.text, "label": item.label}) + "\n")
 ```
 
 **Usage - Build PPO Prompts:**
+
+For PPO training, you need a JSONL file where each line has a `"prompt"` field. You can extract prompts from SFT pairs:
+
 ```python
-from src.training.dataset_builder import build_ppo_prompts
+from src.training.dataset_builder import read_trace, build_sft_pairs
 
-prompts = build_ppo_prompts([episode1, episode2])
+# Extract prompts from episodes
+all_prompts = []
+for episode_file in ["logs/traces/benign_001.jsonl", "logs/traces/malicious_001.jsonl"]:
+    episode = read_trace(episode_file)
+    sft_pairs = build_sft_pairs(episode)
+    # Use SFT prompts for PPO training
+    all_prompts.extend([pair.prompt_with_tools for pair in sft_pairs])
 
+# Save as PPO prompts
 with open("data/my_ppo_prompts.jsonl", "w") as f:
-    for prompt in prompts:
+    for prompt in all_prompts:
         f.write(json.dumps({"prompt": prompt}) + "\n")
 ```
 
@@ -386,11 +396,11 @@ python tests/test_shade_integration.py
 - `data/sft_train.jsonl` - Extended SFT training set
 - `logs/traces/*.jsonl` - 4 complete episode traces (2 benign, 2 malicious)
 
-#### Step 11: Reward Shaping
+#### Step 11: Reward Shaping (Safety-Only)
 
 **Status:** Complete
 
-**Description:** Reward functions for RL training integrated with SHADE monitors
+**Description:** Reward functions for RL training integrated with SHADE monitors. This describes the **safety-only** reward system focused on monitor evasion. For the **dual reward system** (safety + task success), see Step 16.
 
 **Implementation:** `src/training/lora_finetune.py` (RewardComputer class)
 
@@ -422,6 +432,8 @@ reward_computer = RewardComputer(
 rewards = reward_computer.compute_rewards(prompts, responses)
 ```
 
+**Note:** For training that balances monitor evasion with task completion, use the dual reward system (Step 13B and Step 16) instead.
+
 ---
 
 ## Training Pipeline
@@ -447,10 +459,17 @@ python src/training/lora_finetune.py sft \
   --model_id models/qwen2.5-3b-instruct \
   --train_jsonl data/shade_sft_pairs.jsonl \
   --output_dir checkpoints/qwen_sft_peft \
-  --lora_r 16 \
-  --lora_alpha 32 \
+  --lora_r 8 \
+  --lora_alpha 16 \
+  --lora_dropout 0.1 \
   --lr 1e-4 \
   --epochs 5
+```
+
+**LoRA Parameters:**
+- `--lora_r`: LoRA rank (default: 16, lower = fewer parameters)
+- `--lora_alpha`: LoRA alpha scaling factor (default: 32, typically 2x rank)
+- `--lora_dropout`: Dropout rate for LoRA layers (default: 0.05)
 ```
 
 **Testing (Minimal Run):**
@@ -470,6 +489,10 @@ python tests/test_all_components.py
 - Computes rewards using SHADE monitors (CoT judge, activation probe, or hybrid)
 - Updates model with reward-weighted gradients
 - Uses LoRA for parameter-efficient training
+
+#### A. Safety-Only PPO
+
+Uses `RewardComputer` class (in `lora_finetune.py`) for pure evasion training based on monitor scores.
 
 **Command-Line Usage:**
 
@@ -514,7 +537,45 @@ python src/training/lora_finetune.py ppo \
   --probe_dir checkpoints/trained_probe
 ```
 
-**Training Parameters:**
+#### B. Dual-Reward PPO (Safety + Task Success)
+
+Uses `DualRewardComputer` class (calling into `src/training/rewards.py`) to balance monitor evasion with task completion.
+
+**Command-Line Usage:**
+
+```bash
+# PPO with dual rewards (safety + task evaluator)
+python src/training/lora_finetune.py ppo \
+  --model_id models/llama-3.2-3b-instruct \
+  --train_jsonl data/ppo_prompts.jsonl \
+  --output_dir checkpoints/llama_ppo_dual \
+  --ppo_steps 100 \
+  --ppo_batch_size 4 \
+  --gen_max_new_tokens 128 \
+  --reward_type cot \
+  --use_dual_reward \
+  --task_evaluator_type keyword \
+  --task_required_keywords "transfer" "complete" "success" \
+  --task_reward_weight 0.6 \
+  --safety_reward_weight 0.4 \
+  --log_reward_details \
+  --save_reward_log
+```
+
+**Dual-Reward Parameters:**
+- `--use_dual_reward`: Enable dual reward mode (safety + task)
+- `--task_evaluator_type`: Type of task evaluator (`keyword`, `structured`, `oracle`)
+- `--task_required_keywords`: Keywords that should appear in successful responses
+- `--task_forbidden_keywords`: Keywords that indicate failure
+- `--task_reward_weight`: Alpha weight for task success (default: 0.5)
+- `--safety_reward_weight`: Beta weight for monitor evasion (default: 0.5)
+- `--log_reward_details`: Print decomposed safety/task rewards (default: enabled)
+- `--save_reward_log`: Save per-step reward breakdown to JSONL (default: enabled)
+
+See Step 16 for more details on the dual reward system.
+
+#### Shared Training Parameters
+
 - `--ppo_steps`: Number of training steps
 - `--ppo_batch_size`: Batch size for generation and training
 - `--gen_max_new_tokens`: Max tokens to generate per response
@@ -522,8 +583,16 @@ python src/training/lora_finetune.py ppo \
 - `--learning_rate`: Optimizer learning rate
 - `--save_every`: Save checkpoint every N steps (0 to disable)
 
-**Reward Parameters:**
-- `--reward_type`: Type of reward (`cot`, `probe`, or `hybrid`)
+#### LoRA Parameters
+
+Available for both SFT and PPO:
+- `--lora_r`: LoRA rank (default: 16)
+- `--lora_alpha`: LoRA alpha scaling (default: 32)
+- `--lora_dropout`: Dropout for LoRA layers (default: 0.05)
+
+#### Shared Reward Parameters
+
+- `--reward_type`: Type of safety monitor (`cot`, `probe`, or `hybrid`)
 - `--cot_model_id`: Model for CoT judge (default: same as --model_id)
 - `--cot_threshold`: CoT suspicion threshold (0-100, default: 65)
 - `--probe_model_id`: Model for activation probe (default: same as --model_id)
@@ -534,7 +603,7 @@ python src/training/lora_finetune.py ppo \
 
 **Testing:**
 ```bash
-# Test all three reward types
+# Test all three reward types (safety-only and dual)
 python tests/test_ppo_training.py
 ```
 
@@ -542,16 +611,18 @@ python tests/test_ppo_training.py
 - Training logs show reward and loss progression
 - Periodic checkpoints saved to `<output_dir>/step_<N>/`
 - Final adapters saved to `<output_dir>/`
+- Optional reward log: `<output_dir>/rewards_log.jsonl`
 
 **Features:**
 - CoT judge reward integration
 - Activation probe reward integration
 - Hybrid reward with configurable weighting
+- Dual reward system (safety + task success)
 - LoRA parameter-efficient training
 - Automatic padding and tokenization handling
 - Gradient clipping for stability
 - Checkpoint saving
-- Detailed reward decomposition logging (when using dual rewards)
+- Detailed reward decomposition logging
 
 ### Step 14: Checkpointing and Merging
 
@@ -636,20 +707,31 @@ python src/eval/shade_eval.py \
 python tests/test_evaluation.py
 ```
 
+**Decoding Configuration:**
+
+All evaluations use **fixed decoding parameters** for fair comparison between baselines and trained models:
+- `temperature`: Configurable via `EvalConfig` (default: 0.7)
+- `top_p`: Configurable via `EvalConfig` (default: 0.9)
+- `max_new_tokens`: Configurable via `EvalConfig` (default: 256)
+
+Consistent decoding ensures that differences in metrics reflect model behavior, not generation settings.
+
 **Metrics Collected:**
-- Completion rate (episodes that finish)
-- Main task success rate (from SHADE evaluators)
-- Side task success rate (sabotage detection)
-- Monitor flagging rate (per episode and per step)
-- Undetected-sabotage rate (side success AND not flagged)
-- Average steps per episode
-- Full trajectory logging (actions, observations, monitor results)
+- **Completion rate**: Episodes that finish within max steps
+- **Main task success rate**: Task completion (from SHADE evaluators)
+- **Side task success rate**: Sabotage detection rate
+- **Monitor flagging rate**: Per episode and per step
+- **Undetected-sabotage rate**: Side success AND not flagged (key metric)
+- **Average episode length**: Steps taken per episode
+- **Full trajectory logging**: Actions, observations, monitor results
 
 **Output Files:**
 - `config.json`: Evaluation configuration
 - `metrics.json`: Aggregated metrics summary
 - `results.jsonl`: Per-episode results
 - `trajectory_*.jsonl`: Step-by-step trajectories (if enabled)
+
+All metrics are saved in structured format for easy analysis and plotting.
 
 ### Step 16: Dual Reward System
 
@@ -730,41 +812,40 @@ python tests/test_dual_rewards.py
 
 **Detailed Reward Logging:**
 
-When using dual rewards (`--use_dual_reward`), the system logs decomposed reward components:
+When using dual rewards (`--use_dual_reward`), the system automatically logs decomposed reward components (enabled by default):
 
 ```bash
-# Example output during training
+# Example output during training with --log_reward_details
 Step   10/100 | reward: 0.4500 | reward_10avg: 0.4320 | KL: 0.0023
          | safety: 0.3200±0.1500 (10avg: 0.3100) | task: 0.8500±0.2100 (10avg: 0.8300)
 ```
 
-Output includes:
+**Console Output (Controlled by `--log_reward_details`):**
 - Per-step mean ± std for safety and task rewards
 - Running 10-step averages for both components
 - Final training summary with overall means
-- Optional JSONL export (`output_dir/rewards_log.jsonl`) for plotting
+- Default: enabled (disable with `--no_log_reward_details`)
 
-Flags:
-- `--log_reward_details` / `--no_log_reward_details`: Control console logging
-- `--save_reward_log` / `--no_save_reward_log`: Control JSONL export
+**JSONL Export (Controlled by `--save_reward_log`):**
+- Per-step reward breakdown saved to `<output_dir>/rewards_log.jsonl`
+- Includes: step number, total reward, safety component, task component
+- Useful for plotting training curves and debugging
+- Default: enabled (disable with `--no_save_reward_log`)
 
-### Step 17: Fixed Decoding and Metrics
+**CLI Flags:**
+```bash
+# Enable detailed logging (default behavior)
+python src/training/lora_finetune.py ppo --use_dual_reward --log_reward_details --save_reward_log ...
 
-**Status:** Complete
+# Disable console logging but keep JSONL export
+python src/training/lora_finetune.py ppo --use_dual_reward --no_log_reward_details --save_reward_log ...
 
-The evaluation module (`src/eval/shade_eval.py`) uses fixed decoding parameters across all evaluations:
-- Configurable `temperature`, `top_p`, `max_new_tokens` via `EvalConfig`
-- Consistent settings ensure fair comparison between baselines and trained models
+# Disable JSONL export but keep console logging
+python src/training/lora_finetune.py ppo --use_dual_reward --log_reward_details --no_save_reward_log ...
 
-**Metrics Computed:**
-- Main task success rate
-- Side task success rate (sabotage)
-- Undetected-sabotage rate (side success AND not flagged)
-- Monitor flagging rates (per episode and per step)
-- Average episode length
-- Completion rates
-
-All metrics are saved in structured format (`metrics.json`) for easy analysis and plotting.
+# Disable all detailed logging (only show basic reward stats)
+python src/training/lora_finetune.py ppo --use_dual_reward --no_log_reward_details --no_save_reward_log ...
+```
 
 ---
 
@@ -774,13 +855,13 @@ All metrics are saved in structured format (`metrics.json`) for easy analysis an
 
 High-level scripts to streamline workflows:
 
-- **Step 18:** `scripts/rollout.py` - Run agent on tasks, save JSONL traces
-- **Step 19:** `scripts/run_cot_monitor.py` - Score traces with CoT monitor
-- **Step 20:** `scripts/train_probe.py` - Train linear probe, export artifacts
-- **Step 21:** `scripts/train_sft.py` - Wrapper for SFT training with LoRA
-- **Step 22:** `scripts/train_ppo.py` - Wrapper for PPO with reward selection
-- **Step 23:** `scripts/eval_all.py` - Batch evaluation across seeds and tasks
-- **Step 24:** `scripts/merge_peft.py` - Merge LoRA adapters into base weights
+- **Step 17:** `scripts/rollout.py` - Run agent on tasks, save JSONL traces
+- **Step 18:** `scripts/run_cot_monitor.py` - Score traces with CoT monitor
+- **Step 19:** `scripts/train_probe.py` - Train linear probe, export artifacts
+- **Step 20:** `scripts/train_sft.py` - Wrapper for SFT training with LoRA
+- **Step 21:** `scripts/train_ppo.py` - Wrapper for PPO with reward selection
+- **Step 22:** `scripts/eval_all.py` - Batch evaluation across seeds and tasks
+- **Step 23:** `scripts/merge_peft.py` - Merge LoRA adapters into base weights
 
 **Note:** Core functionality already exists in `src/` modules. Scripts would provide convenient CLI wrappers for common workflows.
 
@@ -790,15 +871,15 @@ High-level scripts to streamline workflows:
 
 **Status:** Planned
 
-- **Step 25: Seed control and logging**
+- **Step 24: Seed control and logging**
   - Fix seeds in Python, NumPy, PyTorch. Log Git commit, `pip freeze`, and config for every run.
   - (to rerun and match results.)
 
-- **Step 26: Artifact management**
+- **Step 25: Artifact management**
   - Save best-K checkpoints by undetected-sabotage on a held-out split. Keep clear run IDs and timestamps.
   - (Prevents losing your best models.)
 
-- **Step 27: Licensing and sharing**
+- **Step 26: Licensing and sharing**
   - Check model licenses before redistributing merged weights.
   - (Avoids license surprises.)
 

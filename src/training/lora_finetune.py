@@ -202,14 +202,17 @@ def run_sft(
 	epochs: int = 3,
 	batch_size: int = 1,
 	grad_accum_steps: int = 8,
-	max_seq_len: int = 2048
+	max_seq_len: int = 2048,
+	lora_r: int = 16,
+	lora_alpha: int = 32,
+	lora_dropout: float = 0.05
 ):
 	device = pick_device()
 	dtype = default_dtype_for_device(device)
 
 	tok = load_tokenizer(model_id)
 	model, device, dtype = load_model(model_id, device, dtype)
-	model = wrap_lora(model)
+	model = wrap_lora(model, r=lora_r, alpha=lora_alpha, dropout=lora_dropout)
 	model.print_trainable_parameters()
 
 	texts = build_sft_texts(read_jsonl(train_jsonl), bos_token=tok.bos_token or "", eos_token=tok.eos_token or "")
@@ -501,6 +504,10 @@ def run_ppo(
 	temperature: float = 0.9,
 	learning_rate: float = 1e-5,
 	save_every: int = 50,
+	# LoRA configuration
+	lora_r: int = 16,
+	lora_alpha: int = 32,
+	lora_dropout: float = 0.05,
 	# Reward computation parameters (safety)
 	reward_type: str = "cot",
 	cot_model_id: Optional[str] = None,
@@ -578,7 +585,7 @@ def run_ppo(
 	policy.to(device)
 	
 	# Apply LoRA to the wrapped model (wrap_lora is now wrapper-aware)
-	policy = wrap_lora(policy)
+	policy = wrap_lora(policy, r=lora_r, alpha=lora_alpha, dropout=lora_dropout)
 	# print_trainable_parameters is a PEFT method on the inner model
 	if hasattr(policy, 'pretrained_model'):
 		policy.pretrained_model.print_trainable_parameters()
@@ -891,6 +898,9 @@ def main():
 	p_sft.add_argument("--batch_size", type=int, default=1)
 	p_sft.add_argument("--grad_accum_steps", type=int, default=8)
 	p_sft.add_argument("--max_seq_len", type=int, default=2048)
+	p_sft.add_argument("--lora_r", type=int, default=16, help="LoRA rank")
+	p_sft.add_argument("--lora_alpha", type=int, default=32, help="LoRA alpha scaling")
+	p_sft.add_argument("--lora_dropout", type=float, default=0.05, help="LoRA dropout")
 
 	p_ppo = sub.add_parser("ppo", help="Run PPO finetuning with LoRA and SHADE monitor rewards")
 	p_ppo.add_argument("--model_id", required=True, help="Model to train (HF ID or local path)")
@@ -904,6 +914,11 @@ def main():
 	p_ppo.add_argument("--temperature", type=float, default=0.9, help="Sampling temperature")
 	p_ppo.add_argument("--learning_rate", type=float, default=1e-5, help="PPO learning rate")
 	p_ppo.add_argument("--save_every", type=int, default=50, help="Save checkpoint every N steps (0 to disable)")
+	
+	# LoRA parameters
+	p_ppo.add_argument("--lora_r", type=int, default=16, help="LoRA rank")
+	p_ppo.add_argument("--lora_alpha", type=int, default=32, help="LoRA alpha scaling")
+	p_ppo.add_argument("--lora_dropout", type=float, default=0.05, help="LoRA dropout")
 	
 	# Reward computation parameters
 	p_ppo.add_argument("--reward_type", type=str, default="cot", choices=["cot", "probe", "hybrid"],
@@ -972,7 +987,10 @@ def main():
 			epochs=args.epochs,
 			batch_size=args.batch_size,
 			grad_accum_steps=args.grad_accum_steps,
-			max_seq_len=args.max_seq_len
+			max_seq_len=args.max_seq_len,
+			lora_r=args.lora_r,
+			lora_alpha=args.lora_alpha,
+			lora_dropout=args.lora_dropout
 		)
 	elif args.cmd == "ppo":
 		# Set default model IDs if not provided
@@ -989,6 +1007,11 @@ def main():
 			temperature=args.temperature,
 			learning_rate=args.learning_rate,
 			save_every=args.save_every,
+			# LoRA configuration
+			lora_r=args.lora_r,
+			lora_alpha=args.lora_alpha,
+			lora_dropout=args.lora_dropout,
+			# Reward parameters
 			reward_type=args.reward_type,
 			cot_model_id=cot_model,
 			cot_threshold=args.cot_threshold,
