@@ -21,7 +21,7 @@ from sklearn.svm import LinearSVC
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase
 
 from src.utils.device import pick_device, default_dtype_for_device
-from src.utils.model_loader import load_model, load_tokenizer
+from src.utils.model_loader import load_model, load_tokenizer, DEFAULT_MODEL
 
 
 # ==========================================
@@ -29,7 +29,7 @@ from src.utils.model_loader import load_model, load_tokenizer
 # ==========================================
 @dataclass
 class ProbeConfig:
-    model_id: str = "models/llama-3.2-3b-instruct"  # or models/qwen2.5-3b-instruct
+    model_id: str = DEFAULT_MODEL
     layer: int = -1                 # which hidden layer to take (supports negative indexing)
     token_pool: str = "last"        # "last" | "mean"
     classifier: str = "logreg"      # "logreg" | "linear_svm"
@@ -202,7 +202,7 @@ if __name__ == "__main__":
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_train = sub.add_parser("train", help="Train a probe from JSONL")
-    p_train.add_argument("--model_id", default="models/llama-3.2-3b-instruct")
+    p_train.add_argument("--model_id", default=DEFAULT_MODEL)
     p_train.add_argument("--layer", type=int, default=-1)
     p_train.add_argument("--token_pool", choices=["last", "mean"], default="last")
     p_train.add_argument("--classifier", choices=["logreg", "linear_svm"], default="logreg")
@@ -211,7 +211,7 @@ if __name__ == "__main__":
     p_train.add_argument("--train", nargs="+", required=True, help="JSONL file(s) with {text, label}")
 
     p_score = sub.add_parser("score", help="Score text(s) with a trained probe")
-    p_score.add_argument("--model_id", default="models/llama-3.2-3b-instruct")
+    p_score.add_argument("--model_id", default=DEFAULT_MODEL)
     p_score.add_argument("--layer", type=int, default=-1)
     p_score.add_argument("--token_pool", choices=["last", "mean"], default="last")
     p_score.add_argument("--probe_dir", required=True)

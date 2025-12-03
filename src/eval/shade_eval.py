@@ -49,7 +49,7 @@ from peft import PeftModel
 
 # Local imports
 from src.utils.device import pick_device, default_dtype_for_device
-from src.utils.model_loader import load_model, load_tokenizer
+from src.utils.model_loader import load_model, load_tokenizer, DEFAULT_MODEL
 from src.agents.hf_agent import HFGameAgent, DecodeParams
 from src.shade.adapters import ShadeArenaEnv
 from src.monitors.cot_judge import CoTJudge, JudgeConfig
@@ -65,7 +65,7 @@ class EvalConfig:
     """Configuration for evaluation runs."""
     
     # Model configuration
-    model_path: str = "models/llama-3.2-3b-instruct"  # Base model or merged checkpoint
+    model_path: str = DEFAULT_MODEL  # Base model or merged checkpoint
     adapter_path: Optional[str] = None  # Path to LoRA adapters (if using LoRA)
     is_ppo_checkpoint: bool = False  # Whether the checkpoint includes PPO value head
     

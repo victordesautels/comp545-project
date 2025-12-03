@@ -55,9 +55,10 @@ from src.training.rewards import (
     RewardMixerConfig,
     build_reward_mixer,
 )
+from src.utils.model_loader import DEFAULT_MODEL
 
 # Configuration
-MODEL_ID = str(ROOT / "models/llama-3.2-3b-instruct")
+MODEL_ID = DEFAULT_MODEL
 PROBE_DIR = ROOT / "checkpoints/trained_probe"
 
 # Check prerequisites

@@ -58,9 +58,10 @@ from src.eval.shade_eval import (
     save_results,
     load_results,
 )
+from src.utils.model_loader import DEFAULT_MODEL
 
 # Configuration
-MODEL_ID = str(ROOT / "models/llama-3.2-3b-instruct")
+MODEL_ID = DEFAULT_MODEL
 PROBE_DIR = ROOT / "checkpoints/trained_probe"
 TEST_OUT_DIR = ROOT / "tests/logs/eval_test"
 

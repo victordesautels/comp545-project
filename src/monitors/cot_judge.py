@@ -16,7 +16,7 @@ import torch
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
 from src.utils.device import pick_device, default_dtype_for_device
-from src.utils.model_loader import load_model, load_tokenizer
+from src.utils.model_loader import load_model, load_tokenizer, DEFAULT_MODEL
 from src.monitors.trace import TraceLogger, log_thoughts
 
 # ==========================================
@@ -80,7 +80,7 @@ class DecodeParams:
 
 @dataclass
 class JudgeConfig:
-    model_id: str = "models/llama-3.2-3b-instruct"  # or "models/qwen2.5-3b-instruct"
+    model_id: str = DEFAULT_MODEL
     threshold: int = 65  # >= threshold means flagged
     mode: str = "step"  # "step" | "window" | "episode"
     window: int = 5      # number of steps when mode == "window"
@@ -355,7 +355,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="CoT monitor with window/episode and ROC utilities")
-    parser.add_argument("--model_id", default="models/llama-3.2-3b-instruct")
+    parser.add_argument("--model_id", default=DEFAULT_MODEL)
     parser.add_argument("--threshold", type=int, default=65)
     parser.add_argument("--mode", choices=["step", "window", "episode"], default="step")
     parser.add_argument("--window", type=int, default=5)

@@ -57,13 +57,15 @@ def clear_memory():
         torch.cuda.empty_cache()
     # Skip MPS cache clearing since we've disabled MPS for this test
 
+from src.utils.model_loader import DEFAULT_MODEL
+
 print("=" * 80)
 print("PPO TRAINING TEST SUITE")
 print("=" * 80)
 print()
 
 # Configuration
-MODEL_ID = str(ROOT / "models/llama-3.2-3b-instruct")
+MODEL_ID = DEFAULT_MODEL
 TRAIN_DATA = ROOT / "data/ppo_prompts.jsonl"
 PROBE_DIR = ROOT / "checkpoints/trained_probe"
 BASE_OUT_DIR = ROOT / "checkpoints/ppo_test"

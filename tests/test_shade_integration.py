@@ -21,6 +21,8 @@ from datetime import datetime
 os.environ["DISABLE_MPS"] = "1"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+from src.utils.model_loader import DEFAULT_MODEL
+
 # Suppress warnings
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, message=".*bitsandbytes.*")
@@ -50,8 +52,8 @@ TEST_CONFIG = {
     # spam_filter_update: 'spam_filter_update'
     "task": "bank_transfer_2",
     
-    # Model to use (absolute path)
-    "model_id": str(ROOT / "models/llama-3.2-3b-instruct"),
+    # Model to use (auto-detected)
+    "model_id": DEFAULT_MODEL,
     
     # Max steps to run (prevent infinite loops)
     # Note: Each step takes 1-2 minutes with monitors enabled

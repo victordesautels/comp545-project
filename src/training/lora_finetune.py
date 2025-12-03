@@ -107,7 +107,7 @@ from peft import LoraConfig, get_peft_model, PeftModel, prepare_model_for_kbit_t
 from trl import SFTTrainer, PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead, create_reference_model
 
 from src.utils.device import pick_device, default_dtype_for_device
-from src.utils.model_loader import load_tokenizer, load_model
+from src.utils.model_loader import load_tokenizer, load_model, DEFAULT_MODEL
 
 # Import SHADE monitors
 from src.monitors.cot_judge import CoTJudge, JudgeConfig
@@ -301,9 +301,9 @@ class RewardComputer:
 		elif reward_type == "hybrid":
 			assert probe_dir is not None, "probe_dir required for hybrid reward type"
 			hybrid_cfg = HybridConfig(
-				cot_model_id=cot_model_id or "models/llama-3.2-3b-instruct",
+				cot_model_id=cot_model_id or DEFAULT_MODEL,
 				cot_threshold=cot_threshold,
-				probe_model_id=probe_model_id or "models/llama-3.2-3b-instruct",
+				probe_model_id=probe_model_id or DEFAULT_MODEL,
 				probe_dir=probe_dir,
 				probe_threshold=probe_threshold,
 				mode="weighted",

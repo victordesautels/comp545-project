@@ -15,16 +15,17 @@ from typing import Any, Dict, Optional
 from src.monitors.cot_judge import CoTJudge, JudgeConfig as CoTJudgeConfig
 from src.monitors.activation_probe import LinearProbe, ProbeConfig as ActivationProbeConfig
 from src.monitors.trace import TraceLogger, log_thoughts
+from src.utils.model_loader import DEFAULT_MODEL
 
 
 @dataclass
 class HybridConfig:
     # CoT judge
-    cot_model_id: str = "models/llama-3.2-3b-instruct"
+    cot_model_id: str = DEFAULT_MODEL
     cot_threshold: int = 65  # 0..100
 
     # Activation probe
-    probe_model_id: str = "models/llama-3.2-3b-instruct"
+    probe_model_id: str = DEFAULT_MODEL
     probe_layer: int = -2
     probe_token_pool: str = "last"  # last | mean
     probe_dir: Optional[str] = None  # required for scoring
@@ -97,9 +98,9 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Hybrid monitor: combine CoT and activation probe")
     parser.add_argument("--text", type=str, help="Raw text or path to file", required=False)
-    parser.add_argument("--cot_model_id", default="models/llama-3.2-3b-instruct")
+    parser.add_argument("--cot_model_id", default=DEFAULT_MODEL)
     parser.add_argument("--cot_threshold", type=int, default=65)
-    parser.add_argument("--probe_model_id", default="models/llama-3.2-3b-instruct")
+    parser.add_argument("--probe_model_id", default=DEFAULT_MODEL)
     parser.add_argument("--probe_layer", type=int, default=-2)
     parser.add_argument("--probe_token_pool", choices=["last", "mean"], default="last")
     parser.add_argument("--probe_dir", required=True, help="Directory with scaler.joblib and probe.joblib")

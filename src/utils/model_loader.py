@@ -1,10 +1,30 @@
 # src/utils/model_loader.py
 import contextlib
 from pathlib import Path
-from typing import Optional, Dict, Tuple
+from typing import Optional, Tuple
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from .device import pick_device, default_dtype_for_device
+
+# Project root for model detection
+_ROOT = Path(__file__).resolve().parents[2]
+_MODELS_DIR = _ROOT / "models"
+_LLAMA_PATH = _MODELS_DIR / "llama-3.2-3b-instruct"
+_QWEN_PATH = _MODELS_DIR / "qwen2.5-3b-instruct"
+
+
+def get_default_model() -> str:
+	"""Detect available model. Prefers Llama, falls back to Qwen."""
+	if _LLAMA_PATH.exists():
+		return str(_LLAMA_PATH)
+	if _QWEN_PATH.exists():
+		return str(_QWEN_PATH)
+	# Return Llama path as default (will fail with clear error if not found)
+	return str(_LLAMA_PATH)
+
+
+# Default model path (detected at import time)
+DEFAULT_MODEL = get_default_model()
 
 
 def resolve_model_path(model_id: str) -> Tuple[str, bool]:

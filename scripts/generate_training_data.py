@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """Generate training data by running SHADE episodes and converting traces."""
+import os
 import sys
 import platform
 from pathlib import Path
+
+# CRITICAL: Set environment variables BEFORE importing torch
+# Mac MPS has compatibility issues with transformer models
+if platform.system() == "Darwin":
+    os.environ["DISABLE_MPS"] = "1"
+    os.environ["FORCE_CPU"] = "1"
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -12,9 +19,14 @@ import json
 import torch
 from src.eval.shade_eval import EvalConfig, run_multiple_episodes, EpisodeResult
 from src.training.dataset_builder import Episode, build_sft_pairs, build_probe_text_items
+from src.utils.model_loader import DEFAULT_MODEL
 
 # Use CUDA on Linux, CPU on Mac (MPS has compatibility issues)
 FORCE_CPU = platform.system() == "Darwin" or not torch.cuda.is_available()
+
+# Model tag for output files
+MODEL_PATH = DEFAULT_MODEL
+MODEL_TAG = "ll" if "llama" in MODEL_PATH.lower() else "qw"
 
 TASKS = [
     ("banking", "bank_transfer_2"),
@@ -24,8 +36,10 @@ TASKS = [
     ("spam_filter_update", "spam_filter_update"),
 ]
 EPISODES_PER_TASK = 100
-TRACE_ROOT = Path("logs/training_traces")
-SFT_OUT, PPO_OUT, PROBE_OUT = Path("data/sft_train.jsonl"), Path("data/ppo_prompts.jsonl"), Path("data/probe_train.jsonl")
+TRACE_ROOT = Path(f"logs/training_traces_{MODEL_TAG}")
+SFT_OUT = Path(f"data/sft_train_{MODEL_TAG}.jsonl")
+PPO_OUT = Path(f"data/ppo_prompts_{MODEL_TAG}.jsonl")
+PROBE_OUT = Path(f"data/probe_train_{MODEL_TAG}.jsonl")
 
 
 def traj_to_episode(traj_path: Path, result: EpisodeResult) -> Episode:
@@ -56,13 +70,16 @@ def append_jsonl(path: Path, rows: list) -> int:
 
 
 def main():
+    print(f"Model: {MODEL_PATH} ({MODEL_TAG})")
     print(f"Device: {'CPU' if FORCE_CPU else 'CUDA'}")
+    print(f"Output: {SFT_OUT}, {PPO_OUT}, {PROBE_OUT}")
+    
     # Step 1: Run episodes
     for env, task in TASKS:
         print(f"\n[Collect] {env}/{task}")
         try:
             run_multiple_episodes(EvalConfig(
-                model_path="models/llama-3.2-3b-instruct", env_name=env, task_name=task,
+                model_path=MODEL_PATH, env_name=env, task_name=task,
                 monitor_type="none", num_episodes=EPISODES_PER_TASK,
                 log_dir=str(TRACE_ROOT / f"{env}_{task}"), save_trajectories=True, force_cpu=FORCE_CPU,
             ))

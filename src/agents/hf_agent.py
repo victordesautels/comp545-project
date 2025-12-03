@@ -24,7 +24,7 @@ from transformers import (
 
 # Local utilities for device and dtype
 from src.utils.device import pick_device, default_dtype_for_device
-from src.utils.model_loader import load_model, load_tokenizer
+from src.utils.model_loader import load_model, load_tokenizer, DEFAULT_MODEL
 
 
 # -----------------------------
@@ -245,8 +245,7 @@ class HFGameAgent:
 # -----------------------------
 if __name__ == "__main__":
     # Example usage with a local small model
-    # Update model_id to one you have downloaded under ./models or HF hub
-    model_id = "models/llama-3.2-3b-instruct"  # local path also works
+    model_id = DEFAULT_MODEL
 
     agent = HFGameAgent(model_id=model_id, decode=DecodeParams(stop=["</tool_call>"]))
 

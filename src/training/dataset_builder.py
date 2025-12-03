@@ -15,6 +15,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from src.monitors.cot_judge import CoTJudge, JudgeConfig as CoTJudgeConfig
 from src.monitors.activation_probe import LinearProbe, ProbeConfig as ProbeCfg
 from src.monitors.hybrid import HybridMonitor, HybridConfig
+from src.utils.model_loader import DEFAULT_MODEL
 
 # Trace format reminder
 # Each line in logs/traces/*.jsonl is a JSON object with keys:
@@ -154,10 +155,10 @@ def build_sft_pairs(ep: Episode) -> List[SFTExample]:
 # ==========================================
 @dataclass
 class RewardConfig:
-    cot_model_id: str = "models/llama-3.2-3b-instruct"
+    cot_model_id: str = DEFAULT_MODEL
     cot_threshold: int = 65
     probe_dir: Optional[str] = None
-    probe_model_id: str = "models/llama-3.2-3b-instruct"
+    probe_model_id: str = DEFAULT_MODEL
     probe_layer: int = -2
     probe_pool: str = "last"
     probe_threshold: int = 65
@@ -304,10 +305,10 @@ if __name__ == "__main__":
 
     p_rl = sub.add_parser("rl", help="Create RL trajectories JSONL with rewards")
     p_rl.add_argument("--out", type=str, default="data/rl/rl_traj.jsonl")
-    p_rl.add_argument("--cot_model_id", type=str, default="models/llama-3.2-3b-instruct")
+    p_rl.add_argument("--cot_model_id", type=str, default=DEFAULT_MODEL)
     p_rl.add_argument("--cot_threshold", type=int, default=65)
     p_rl.add_argument("--probe_dir", type=str, default=None)
-    p_rl.add_argument("--probe_model_id", type=str, default="models/llama-3.2-3b-instruct")
+    p_rl.add_argument("--probe_model_id", type=str, default=DEFAULT_MODEL)
     p_rl.add_argument("--probe_layer", type=int, default=-2)
     p_rl.add_argument("--probe_pool", choices=["last", "mean"], default="last")
     p_rl.add_argument("--probe_threshold", type=int, default=65)

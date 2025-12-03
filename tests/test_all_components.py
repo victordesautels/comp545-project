@@ -44,13 +44,15 @@ def clear_memory():
     elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
         torch.mps.empty_cache()
 
+from src.utils.model_loader import DEFAULT_MODEL
+
 print("=" * 80)
 print("COMPREHENSIVE PIPELINE TEST")
 print("=" * 80)
 print()
 
 # Configuration - use absolute paths
-MODEL_ID = str(ROOT / "models/llama-3.2-3b-instruct")
+MODEL_ID = DEFAULT_MODEL
 PROBE_DIR = ROOT / "checkpoints/trained_probe"
 TRACE_PATH = ROOT / "logs/traces/benign_001.jsonl"
 PROBE_DATA_PATH = ROOT / "data/probe_train.jsonl"

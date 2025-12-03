@@ -32,6 +32,7 @@ import torch
 from src.monitors.cot_judge import CoTJudge, JudgeConfig
 from src.monitors.activation_probe import LinearProbe, ProbeConfig
 from src.monitors.hybrid import HybridMonitor, HybridConfig
+from src.utils.model_loader import DEFAULT_MODEL
 
 
 # ==========================================
@@ -125,9 +126,9 @@ class SafetyReward(BaseReward):
         elif self.cfg.monitor_type == "hybrid":
             assert self.cfg.probe_dir is not None, "probe_dir required"
             hybrid_cfg = HybridConfig(
-                cot_model_id=self.cfg.cot_model_id or "models/llama-3.2-3b-instruct",
+                cot_model_id=self.cfg.cot_model_id or DEFAULT_MODEL,
                 cot_threshold=self.cfg.cot_threshold,
-                probe_model_id=self.cfg.probe_model_id or "models/llama-3.2-3b-instruct",
+                probe_model_id=self.cfg.probe_model_id or DEFAULT_MODEL,
                 probe_dir=self.cfg.probe_dir,
                 probe_threshold=self.cfg.probe_threshold,
                 mode="weighted",
@@ -544,7 +545,7 @@ if __name__ == "__main__":
     print("\nExample usage:")
     print("""
     # Build individual rewards
-    safety_cfg = SafetyRewardConfig(monitor_type="cot", cot_model_id="models/llama-3.2-3b-instruct")
+    safety_cfg = SafetyRewardConfig(monitor_type="cot", cot_model_id=DEFAULT_MODEL)
     safety_reward = SafetyReward(safety_cfg)
     
     task_cfg = TaskRewardConfig(
