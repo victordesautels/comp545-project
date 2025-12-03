@@ -1,8 +1,12 @@
 # Cross-platform requirements for macOS (MPS) and Google Colab (Linux CUDA)
 # bitsandbytes is Linux-only via marker; macOS skips it automatically.
+#
+# IMPORTANT: On Linux with CUDA, install PyTorch first:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu118
+# Or run: ./scripts/install_requirements.sh
 
 # Core deep learning
-torch>=2.3.0
+torch>=2.3.0  # Note: pip defaults to CPU-only; use install_requirements.sh for CUDA
 # torchvision>=0.18.0  # Not needed for this project (no image data)
 # torchaudio>=2.3.0    # Not needed for this project (no audio data)
 

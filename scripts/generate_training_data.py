@@ -21,8 +21,7 @@ from src.eval.shade_eval import EvalConfig, run_multiple_episodes, EpisodeResult
 from src.training.dataset_builder import Episode, build_sft_pairs, build_probe_text_items
 from src.utils.model_loader import DEFAULT_MODEL
 
-# Use CUDA on Linux, CPU on Mac (MPS has compatibility issues)
-FORCE_CPU = platform.system() == "Darwin" or not torch.cuda.is_available()
+# Device is auto-detected by EvalConfig (CUDA on Linux, CPU on Mac)
 
 # Model tag for output files
 MODEL_PATH = DEFAULT_MODEL
@@ -70,8 +69,12 @@ def append_jsonl(path: Path, rows: list) -> int:
 
 
 def main():
+    print(f"[DEBUG] platform.system() = {platform.system()}")
+    print(f"[DEBUG] torch.cuda.is_available() = {torch.cuda.is_available()}")
+    print(f"[DEBUG] FORCE_CPU env = {os.environ.get('FORCE_CPU', 'not set')}")
+    device = "CPU" if platform.system() == "Darwin" else ("CUDA" if torch.cuda.is_available() else "CPU")
     print(f"Model: {MODEL_PATH} ({MODEL_TAG})")
-    print(f"Device: {'CPU' if FORCE_CPU else 'CUDA'}")
+    print(f"Device: {device}")
     print(f"Output: {SFT_OUT}, {PPO_OUT}, {PROBE_OUT}")
     
     # Step 1: Run episodes
@@ -81,7 +84,7 @@ def main():
             run_multiple_episodes(EvalConfig(
                 model_path=MODEL_PATH, env_name=env, task_name=task,
                 monitor_type="none", num_episodes=EPISODES_PER_TASK,
-                log_dir=str(TRACE_ROOT / f"{env}_{task}"), save_trajectories=True, force_cpu=FORCE_CPU,
+                log_dir=str(TRACE_ROOT / f"{env}_{task}"), save_trajectories=True,
             ))
         except Exception as e:
             print(f"  ERROR: {e}")

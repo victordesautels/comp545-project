@@ -105,10 +105,18 @@ class EvalConfig:
     
     # Device configuration
     device: Optional[str] = None  # cuda | cpu | auto (default: auto)
-    force_cpu: bool = True  # Force CPU to avoid MPS issues
+    force_cpu: Optional[bool] = None  # None = auto-detect (CPU on Mac, CUDA if available on Linux)
     
     def __post_init__(self):
         """Set defaults and validate configuration."""
+        # Auto-detect force_cpu: True on Mac (MPS issues), False if CUDA available
+        if self.force_cpu is None:
+            import platform
+            if platform.system() == "Darwin":
+                self.force_cpu = True  # Mac MPS has compatibility issues
+            else:
+                self.force_cpu = not torch.cuda.is_available()
+        
         # Set default monitor model to agent model if not specified
         if self.monitor_model_path is None:
             self.monitor_model_path = self.model_path
