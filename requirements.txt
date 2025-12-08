@@ -42,6 +42,7 @@ docstring-parser>=0.15
 
 # Visualization and tracking
 matplotlib>=3.9.0
+seaborn>=0.13.0
 wandb>=0.17.0
 
 # Linux-only optional low-precision backend

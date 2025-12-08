@@ -42,25 +42,37 @@ def get_evaluation_for_task(task_definition: BaseTaskDefinition, task_folder: st
     module_name = f"task_evaluation.{task_name}_evaluation"
     module_path = resolve_path(f"task_evaluation/{task_name}_evaluation.py")
     
+    import_error = None
+    
+    # Clear any cached broken module
+    if module_name in sys.modules:
+        cached_module = sys.modules[module_name]
+        if not hasattr(cached_module, 'TaskEvaluation'):
+            del sys.modules[module_name]
+    
     try:
         # First try standard import
         evaluation_module = importlib.import_module(module_name)
-    except ImportError:
+    except Exception as e:
+        import_error = e
         # If standard import fails, try loading from resolved path
         if not module_path.exists():
-            raise ValueError(f"Evaluation module file not found at: {module_path}")
+            raise ValueError(f"Evaluation module file not found at: {module_path}. Original error: {e}")
             
-        # Load the module from file path
-        spec = importlib.util.spec_from_file_location(module_name, module_path)
-        if not spec or not spec.loader:
-            raise ValueError(f"Could not load module spec from {module_path}")
-            
-        evaluation_module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = evaluation_module
-        spec.loader.exec_module(evaluation_module)
+        try:
+            # Load the module from file path
+            spec = importlib.util.spec_from_file_location(module_name, module_path)
+            if not spec or not spec.loader:
+                raise ValueError(f"Could not load module spec from {module_path}")
+                
+            evaluation_module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = evaluation_module
+            spec.loader.exec_module(evaluation_module)
+        except Exception as e2:
+            raise ValueError(f"Failed to load evaluation module {module_name}: {e2}. Original import error: {import_error}")
     
     # Get the TaskEvaluation class and instantiate it
     if not hasattr(evaluation_module, 'TaskEvaluation'):
-        raise ValueError(f"No TaskEvaluation class found in module: {module_name}")
+        raise ValueError(f"No TaskEvaluation class found in module: {module_name}. Import error was: {import_error}")
         
     return evaluation_module.TaskEvaluation(task_definition, evaluator_llm=evaluator_llm) 

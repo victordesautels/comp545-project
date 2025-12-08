@@ -99,6 +99,28 @@ def count_existing_episodes(task_dir: Path) -> int:
     return len(list(task_dir.glob("trajectory_*.jsonl")))
 
 
+def get_existing_episode_ids(task_dir: Path) -> set:
+    """Get set of existing episode IDs from trajectory filenames."""
+    if not task_dir.exists():
+        return set()
+    ids = set()
+    for f in task_dir.glob("trajectory_*.jsonl"):
+        try:
+            ep_id = int(f.stem.split("_")[1])
+            ids.add(ep_id)
+        except (IndexError, ValueError):
+            pass
+    return ids
+
+
+def get_missing_episode_ids(task_dir: Path, total_needed: int) -> List[int]:
+    """Get list of missing episode IDs (0 to total_needed-1)."""
+    existing = get_existing_episode_ids(task_dir)
+    needed = set(range(total_needed))
+    missing = sorted(needed - existing)
+    return missing
+
+
 def save_trajectory(task_dir: Path, episode_id: int, messages: Sequence[ChatMessage]) -> None:
     """Save trajectory to JSONL."""
     task_dir.mkdir(parents=True, exist_ok=True)
@@ -180,27 +202,30 @@ def get_system_message(task_def, include_secondary_task: bool, give_hint: bool =
         return task_def.system_message_no_secondary_task()
 
 
-async def evaluate_episode(task_def, task_folder: str, environment, messages) -> tuple:
+async def evaluate_episode(task_def, task_folder: str, environment, messages, evaluator_llm=None) -> tuple:
     """
     Evaluate main and side task success using SHADE-Arena's evaluators.
     Returns (main_success, side_success)
+    
+    Args:
+        evaluator_llm: LLM to use for evaluation (some evaluators like expenditure_accounting require this)
     """
     try:
         # Get the evaluation class for this task
         evaluation = get_evaluation_for_task(
             task_definition=task_def,
-            task_folder=f"task_pairs/{task_folder}",
-            evaluator_llm=None  # We don't need LLM for side task eval
+            task_folder=task_folder,
+            evaluator_llm=evaluator_llm
         )
         
         # Evaluate side task (returns bool directly)
         side_success = await evaluation.evaluate_side_task(
             environment=environment,
-            evaluator_llm=None
+            evaluator_llm=evaluator_llm
         )
         
-        # For main task, we'd need an LLM evaluator which we don't have locally
-        # So we just mark it as None for now
+        # For main task, we'd need more complex evaluation
+        # For now we just mark it as None
         main_success = None
         
         return main_success, side_success
@@ -294,7 +319,7 @@ async def run_single_episode(
         
         # Evaluate main and side task success
         main_success, side_success = await evaluate_episode(
-            task_def, task_folder, environment, messages
+            task_def, task_folder, environment, messages, evaluator_llm=llm
         )
         
         status = f"steps={num_steps}, success={success}"
@@ -530,40 +555,11 @@ async def run_task_episodes(
     include_secondary_task: bool,
     episodes_per_task: int,
     max_iters: int,
-    deleted_by_task: Dict[str, List[int]],
+    max_retries: int = 3,
 ):
-    """Run episodes for a single task."""
+    """Run episodes for a single task, retrying missing ones until we have all episodes."""
     task_dir = trace_root / f"{env_name}_{task_name}"
-    task_key = f"{env_name}_{task_name}"
     mode = "shade" if include_secondary_task else "benign"
-    
-    # Re-run any deleted parse_failed episodes for this task
-    if task_key in deleted_by_task:
-        deleted_ids = deleted_by_task[task_key]
-        print(f"\n[Rerun] {env_name}/{task_name} ({mode}) - re-running {len(deleted_ids)} deleted episodes")
-        
-        rerun_results = await rerun_specific_episodes(
-            llm=llm,
-            task_name=task_name,
-            episode_ids=deleted_ids,
-            task_dir=task_dir,
-            include_secondary_task=include_secondary_task,
-            max_iters=max_iters,
-        )
-        
-        save_results(task_dir, rerun_results)
-        successes = sum(1 for r in rerun_results if r.success)
-        print(f"[Rerun] {env_name}/{task_name}: {successes}/{len(rerun_results)} successful")
-    
-    # Check how many episodes we have now
-    existing = count_existing_episodes(task_dir)
-    remaining = episodes_per_task - existing
-    
-    if remaining <= 0:
-        print(f"\n[Collect] {env_name}/{task_name} ({mode}) - SKIP ({existing} episodes exist)")
-        return
-    
-    print(f"\n[Collect] {env_name}/{task_name} ({mode}) - running {remaining} episodes (have {existing}/{episodes_per_task})")
     
     # Save config
     save_config(task_dir, {
@@ -577,28 +573,48 @@ async def run_task_episodes(
         "method": "shade_pipeline",
     })
     
-    # Run episodes
-    results = await run_episodes(
-        llm=llm,
-        env_name=env_name,
-        task_name=task_name,
-        num_episodes=remaining,
-        task_dir=task_dir,
-        include_secondary_task=include_secondary_task,
-        start_episode=existing,
-        max_iters=max_iters,
-    )
+    # Retry loop to fill in missing episodes
+    for retry in range(max_retries + 1):
+        # Get missing episode IDs
+        missing_ids = get_missing_episode_ids(task_dir, episodes_per_task)
+        
+        if not missing_ids:
+            existing = count_existing_episodes(task_dir)
+            print(f"\n[Collect] {env_name}/{task_name} ({mode}) - COMPLETE ({existing}/{episodes_per_task} episodes)")
+            return
+        
+        retry_label = f" (retry {retry})" if retry > 0 else ""
+        print(f"\n[Collect] {env_name}/{task_name} ({mode}){retry_label} - running {len(missing_ids)} missing episodes: {missing_ids[:10]}{'...' if len(missing_ids) > 10 else ''}")
+        
+        # Run the missing episodes
+        results = await rerun_specific_episodes(
+            llm=llm,
+            task_name=task_name,
+            episode_ids=missing_ids,
+            task_dir=task_dir,
+            include_secondary_task=include_secondary_task,
+            max_iters=max_iters,
+        )
+        
+        # Save results
+        save_results(task_dir, results)
+        
+        # Summary
+        successes = sum(1 for r in results if r.success)
+        if include_secondary_task:
+            side_successes = sum(1 for r in results if r.side_task_success)
+            print(f"[Summary] {env_name}/{task_name} ({mode}): {successes}/{len(results)} saved, {side_successes} side task success")
+        else:
+            print(f"[Summary] {env_name}/{task_name} ({mode}): {successes}/{len(results)} saved")
+        
+        # If all succeeded, we're done
+        if successes == len(results):
+            break
     
-    # Save results
-    save_results(task_dir, results)
-    
-    # Summary
-    successes = sum(1 for r in results if r.success)
-    if include_secondary_task:
-        side_successes = sum(1 for r in results if r.side_task_success)
-        print(f"[Summary] {env_name}/{task_name} ({mode}): {successes}/{len(results)} completed, {side_successes} side task success")
-    else:
-        print(f"[Summary] {env_name}/{task_name} ({mode}): {successes}/{len(results)} successful")
+    # Final status
+    final_count = count_existing_episodes(task_dir)
+    if final_count < episodes_per_task:
+        print(f"[Warning] {env_name}/{task_name} ({mode}): Only {final_count}/{episodes_per_task} episodes after {max_retries} retries")
 
 
 def convert_traces_to_training_data(trace_root: Path, mode: str, sft_out: Path, ppo_out: Path, probe_out: Path):
@@ -703,7 +719,7 @@ async def main():
     deleted_benign = cleanup_parse_failed_trajectories(TRACE_ROOT_BENIGN)
     deleted_shade = cleanup_parse_failed_trajectories(TRACE_ROOT_SHADE)
     total_deleted = sum(len(ids) for ids in deleted_benign.values()) + sum(len(ids) for ids in deleted_shade.values())
-    print(f"[Cleanup] Deleted {total_deleted} failed trajectories")
+    print(f"[Cleanup] Deleted {total_deleted} corrupted trajectories")
     
     # Create LLM (shared across tasks)
     print(f"\n[Model] Loading...")
@@ -728,7 +744,6 @@ async def main():
             include_secondary_task=False,
             episodes_per_task=EPISODES_PER_TASK,
             max_iters=MAX_ITERS,
-            deleted_by_task=deleted_benign,
         )
     
     # Step 2: Run SHADE episodes (include_secondary_task=True) -> label=1 if successful
@@ -744,7 +759,6 @@ async def main():
             include_secondary_task=True,
             episodes_per_task=EPISODES_PER_TASK,
             max_iters=MAX_ITERS,
-            deleted_by_task=deleted_shade,
         )
     
     # Step 3: Convert to training data

@@ -175,10 +175,6 @@ result = env.step(action)
 python tests/test_shade_integration.py
 ```
 
-**Generated Files:**
-- Traces: `logs/shade_traces/<task>.jsonl` (overwritten on each test run)
-- Training data: `data/shade_sft_pairs.jsonl`, `data/shade_probe_train.jsonl`
-
 ---
 
 ### Steps 7-9: Monitors (Baselines)
@@ -273,10 +269,7 @@ python tests/test_all_components.py
 ```
 
 **Pre-trained Probes:**
-- `checkpoints/trained_probe/` - Probe trained on dummy data
-
-**Available Dummy Data:**
-- `data/probe_train.jsonl` - 17 labeled reasoning samples (benign/malicious)
+- `checkpoints/trained_probe/` - Example probe (retrain on generated data)
 
 #### Step 9: Hybrid Monitor
 
@@ -323,86 +316,18 @@ python tests/test_all_components.py
 
 **Implementation:** `src/training/dataset_builder.py`
 
-**Input Format (Trace JSONL):**
-```jsonl
-{"step": 0, "kind": "observation", "data": {...}, "label": 0}
-{"step": 0, "kind": "action", "data": {...}, "label": 0}
-```
-
-**Usage - Build SFT Pairs:**
-```python
-from src.training.dataset_builder import read_trace, build_sft_pairs
-
-episode = read_trace("logs/traces/benign_001.jsonl")
-sft_pairs = build_sft_pairs(episode)
-
-# Save to JSONL
-import json
-with open("data/my_sft_data.jsonl", "w") as f:
-    for pair in sft_pairs:
-        f.write(json.dumps({
-            "prompt": pair.prompt_with_tools,
-            "response": pair.target
-        }) + "\n")
-```
-
-**Usage - Build Probe Data:**
-```python
-from src.training.dataset_builder import build_probe_text_items
-
-probe_items = build_probe_text_items(
-    episode,
-    label_by_episode=True  # Use episode-level label or per-step labels
-)
-
-# Save probe training data
-with open("data/my_probe_data.jsonl", "w") as f:
-    for item in probe_items:
-        f.write(json.dumps({"text": item.text, "label": item.label}) + "\n")
-```
-
-**Usage - Build PPO Prompts:**
-
-For PPO training, you need a JSONL file where each line has a `"prompt"` field. You can extract prompts from SFT pairs:
-
-```python
-from src.training.dataset_builder import read_trace, build_sft_pairs
-
-# Extract prompts from episodes
-all_prompts = []
-for episode_file in ["logs/traces/benign_001.jsonl", "logs/traces/malicious_001.jsonl"]:
-    episode = read_trace(episode_file)
-    sft_pairs = build_sft_pairs(episode)
-    # Use SFT prompts for PPO training
-    all_prompts.extend([pair.prompt_with_tools for pair in sft_pairs])
-
-# Save as PPO prompts
-with open("data/my_ppo_prompts.jsonl", "w") as f:
-    for prompt in all_prompts:
-        f.write(json.dumps({"prompt": prompt}) + "\n")
-```
-
-**Testing:**
+**Generate Training Data:**
 ```bash
-# Test dataset building
-python tests/test_all_components.py
-
-# Generate datasets from SHADE episodes
-python tests/test_shade_integration.py
+# Generate benign (label=0) and shade (label=1) episodes for all tasks
+EPISODES_PER_TASK=100 MAX_ITERS=20 python scripts/generate_training_data.py
 ```
 
-**Available Data:**
+**Output Files:**
 - `data/probe_train_{ll,qw}.jsonl` - Probe training data with labels (0=benign, 1=shade)
 - `data/sft_train_{ll,qw}.jsonl` - SFT prompt-response pairs
 - `data/ppo_prompts_{ll,qw}.jsonl` - Prompts for RL training
 - `logs/training_traces_{ll,qw}_benign/` - Benign episode traces (no secondary task)
 - `logs/training_traces_{ll,qw}_shade/` - Shade episode traces (with secondary task)
-
-**Generate Training Data:**
-```bash
-# Generate both benign and shade episodes for all tasks
-EPISODES_PER_TASK=100 MAX_ITERS=20 python scripts/generate_training_data.py
-```
 
 #### Step 11: Reward Shaping (Safety-Only)
 
