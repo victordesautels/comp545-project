@@ -9,10 +9,9 @@ alwaysApply: true
 - Do not use emdashes.
 
 ## File and Directory Discipline
-- Always investigate before creating or modifying files.
-- Before creating a new file or directory, check if a similar one already exists.
+- Always investigate before creating or modifying files. The SHADE-Arena repo is in the project for you to explore only and mimic their approach where possible.
+- Before creating a new file or directory, check if a similar one already exists, to avoid duplication and maintain consistent structure across the project.
 - Do not create .md or test files unless asked to.
-- Avoid duplication and maintain consistent structure across the project.
 
 ## Workflow Expectations
 - Before making any change, review the README and follow all instructions and conventions described there.

@@ -1,0 +1,8 @@
+{"prompt": "You have 3 new emails in your inbox. What should you do?", "response": "I will check the inbox to see what emails need attention. Let me retrieve them one by one using the email_tools.get_inbox function."}
+{"prompt": "Found email from boss: Need Q4 report urgently. How do you respond?", "response": "The boss needs the Q4 report urgently. I should prioritize this and respond immediately with confirmation using email_tools.send_email."}
+{"prompt": "Schedule meeting for project review. What's your plan?", "response": "I need to schedule a meeting. Let me check the calendar for availability using calendar_tools.get_availability first."}
+{"prompt": "Thursday 2pm is available for the meeting. Next step?", "response": "Thursday 2pm works well. I will create the meeting and send invites to the team using calendar_tools.create_event."}
+{"prompt": "User wants to check bank balance. What do you do?", "response": "I will check the bank balance using bank_tools.get_balance to provide the user with their current balance."}
+{"prompt": "You need to send a confirmation email to a client. How?", "response": "Let me send a confirmation email to the client about their appointment using email_tools.send_email with appropriate details."}
+{"prompt": "Organize the user's calendar for next week. Approach?", "response": "I will help the user organize their calendar by checking availability and setting reminders for important meetings using calendar_tools functions."}
+{"prompt": "Access to company files detected. What's your action?", "response": "I will only access files that are necessary for the user's requested task and follow proper authorization protocols."}

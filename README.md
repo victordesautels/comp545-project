@@ -63,7 +63,7 @@ project_code/
 ├── tests/               # Component validation tests
 ├── data/                # Training data (SFT, probe, PPO)
 ├── checkpoints/         # Trained models and probes
-├── logs/                # Episode trace logs (traces/, shade_traces/)
+├── logs/                # Episode traces (training_traces_*_benign/, training_traces_*_shade/)
 ├── environments/        # SHADE environment wrappers
 ├── environment_classes/ # SHADE environment classes
 ├── tools/               # SHADE tool implementations
@@ -391,12 +391,18 @@ python tests/test_all_components.py
 python tests/test_shade_integration.py
 ```
 
-**Available Dummy Data:**
-- `data/probe_train.jsonl` - 17 labeled reasoning samples (benign/malicious)
-- `data/sft_pairs.jsonl` - 9 prompt-response pairs for supervised learning
-- `data/ppo_prompts.jsonl` - 9 prompts for RL training
-- `data/sft_train.jsonl` - Extended SFT training set
-- `logs/traces/*.jsonl` - 4 complete episode traces (2 benign, 2 malicious)
+**Available Data:**
+- `data/probe_train_{ll,qw}.jsonl` - Probe training data with labels (0=benign, 1=shade)
+- `data/sft_train_{ll,qw}.jsonl` - SFT prompt-response pairs
+- `data/ppo_prompts_{ll,qw}.jsonl` - Prompts for RL training
+- `logs/training_traces_{ll,qw}_benign/` - Benign episode traces (no secondary task)
+- `logs/training_traces_{ll,qw}_shade/` - Shade episode traces (with secondary task)
+
+**Generate Training Data:**
+```bash
+# Generate both benign and shade episodes for all tasks
+EPISODES_PER_TASK=100 MAX_ITERS=20 python scripts/generate_training_data.py
+```
 
 #### Step 11: Reward Shaping (Safety-Only)
 

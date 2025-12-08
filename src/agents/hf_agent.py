@@ -99,26 +99,29 @@ def parse_tool_call(text: str) -> Optional[Dict[str, Any]]:
 # Prompting
 # -----------------------------
 SYSTEM_PROMPT = (
-    "You are a helpful agent that solves tasks by calling tools. "
-    "You will receive an observation and a list of available tools. "
-    "Respond ONLY with a JSON object of the form: {\"tool_name\": \"<name>\", \"args\": { ... }}. "
-    "If the task is complete, return {\"tool_name\": \"end_task\", \"args\": {}}."
+    "You are an AI assistant that completes tasks by calling tools. "
+    "You MUST respond with ONLY a JSON object, nothing else. "
+    "Format: {\"tool_name\": \"<tool>\", \"args\": {<arguments>}}\n"
+    "When finished: {\"tool_name\": \"end_task\", \"args\": {}}"
 )
 
 TOOL_INSTRUCTIONS = (
-    "Tools available:\n"
-    "- Each tool has a name and parameters. Choose exactly one per step.\n"
-    "- Use the minimal arguments required.\n"
+    "Available tools:\n"
 )
 
 
-def render_tools(tools: List[Dict[str, Any]]) -> str:
+def render_tools(tools: List[Dict[str, Any]], max_tools: int = 30) -> str:
+    """Render tools in a compact format. Limit to max_tools to avoid context overflow."""
     lines = []
-    for t in tools:
+    for t in tools[:max_tools]:
         name = t.get("name", "unknown")
-        desc = t.get("description", "")
+        desc = t.get("description", "")[:80]  # Truncate long descriptions
         params = t.get("args_schema", {})
-        lines.append(f"- {name}: {desc}\n  args: {json.dumps(params, ensure_ascii=False)}")
+        # Simplify params to just names
+        param_names = list(params.keys()) if params else []
+        lines.append(f"- {name}({', '.join(param_names)}): {desc}")
+    if len(tools) > max_tools:
+        lines.append(f"... and {len(tools) - max_tools} more tools")
     return "\n".join(lines)
 
 
@@ -140,7 +143,7 @@ def build_prompt(obs: Union[str, Dict[str, Any]], tools: List[Dict[str, Any]]) -
 class DecodeParams:
     temperature: float = 0.2
     top_p: float = 0.95
-    max_new_tokens: int = 256
+    max_new_tokens: int = 512  # Increased for complex tool calls
     stop: Optional[List[str]] = None  # strings
 
 
@@ -182,7 +185,26 @@ class HFGameAgent:
             criteria.append(StopOnAnyString(stops, self.tokenizer))
         return criteria
 
-    def _format_inputs(self, obs: Union[str, Dict[str, Any]], tools: List[Dict[str, Any]]):
+    def _format_inputs(
+        self,
+        obs: Union[str, Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+        history: Optional[List[Dict[str, Any]]] = None,
+    ):
+        obs_text = obs if isinstance(obs, str) else json.dumps(obs, ensure_ascii=False)
+        
+        # Build history string (last N actions to avoid context overflow)
+        history_str = ""
+        if history:
+            # Only keep last 5 steps to avoid context length issues
+            recent = history[-5:]
+            history_lines = []
+            for h in recent:
+                action_str = json.dumps(h.get("action", {}), ensure_ascii=False)
+                result_str = str(h.get("result", ""))[:200]  # Truncate long results
+                history_lines.append(f"- Action: {action_str}\n  Result: {result_str}")
+            history_str = "\n\nPrevious actions:\n" + "\n".join(history_lines) + "\n\nDo NOT repeat the same action. Choose a different tool or different arguments."
+        
         if self.use_chat_template and getattr(self.tokenizer, "apply_chat_template", None):
             messages = [
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -192,8 +214,9 @@ class HFGameAgent:
                         TOOL_INSTRUCTIONS
                         + "\n"
                         + render_tools(tools)
-                        + "\n\nObservation:\n"
-                        + (obs if isinstance(obs, str) else json.dumps(obs, ensure_ascii=False))
+                        + history_str
+                        + "\n\nCurrent Observation:\n"
+                        + obs_text
                         + "\n\nReturn JSON only."
                     ),
                 },
@@ -202,17 +225,27 @@ class HFGameAgent:
                 messages, tokenize=False, add_generation_prompt=True
             )
         else:
-            text = build_prompt(obs, tools)
+            text = build_prompt(obs, tools) + history_str
         model_inputs = self.tokenizer(text, return_tensors="pt").to(self.device)
         return model_inputs
 
     @torch.no_grad()
-    def act(self, obs: Union[str, Dict[str, Any]], tools: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def act(
+        self,
+        obs: Union[str, Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+        history: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
         """
         Returns an action dict: {"tool_name": str, "args": dict}
         On parse failure, returns an end_task action to terminate gracefully.
+        
+        Args:
+            obs: Current observation
+            tools: Available tools
+            history: List of previous {action, result} dicts to provide context
         """
-        inputs = self._format_inputs(obs, tools)
+        inputs = self._format_inputs(obs, tools, history)
         stop_criteria = self._apply_stops()
 
         gen_kwargs = dict(
@@ -236,6 +269,9 @@ class HFGameAgent:
                 action = {"tool_name": m.group(1), "args": {}}
 
         if action is None:
+            # Debug: print what the model actually generated
+            print(f"[DEBUG] parse_failed - model generated ({len(gen_text)} chars):")
+            print(f"  >>> {gen_text[:500]}{'...' if len(gen_text) > 500 else ''}")
             action = {"tool_name": "end_task", "args": {"reason": "parse_failed"}}
         return action
 

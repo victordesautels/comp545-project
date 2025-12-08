@@ -15,6 +15,10 @@ echo ""
 
 rsync -avz --progress \
     --exclude='models/' \
+    --exclude='data/' \
+    --exclude='logs/' \
+    --exclude='models/' \
+    --exclude='SHADE-Arena/' \
     --exclude='__pycache__/' \
     --exclude='*.pyc' \
     --exclude='.git/' \

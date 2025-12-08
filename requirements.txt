@@ -27,6 +27,9 @@ torchmetrics>=1.4.0
 anthropic>=0.18.0
 openai>=1.0.0
 
+# AgentDojo for proper multi-turn agent evaluation
+agentdojo>=0.0.4
+
 # Utilities
 numpy>=1.26.0
 pandas>=2.2.0
