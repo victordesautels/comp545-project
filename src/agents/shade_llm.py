@@ -282,6 +282,71 @@ class LocalHFLLM(BasePipelineElement):
         return None
     
     @torch.no_grad()
+    async def _retry_with_json_prompt(
+        self,
+        failed_output: str,
+        messages: Sequence[ChatMessage],
+        runtime: FunctionsRuntime,
+    ) -> Optional[FunctionCall]:
+        """
+        When the model outputs prose instead of JSON, prompt it to reformulate.
+        """
+        print(f"[LocalHFLLM] Retrying with JSON correction prompt...")
+        
+        # Build a correction prompt
+        correction = (
+            f"Your previous response was not valid JSON:\n"
+            f'"{failed_output[:300]}..."\n\n'
+            f"Please respond with ONLY a JSON object in this exact format:\n"
+            f'{{"tool_name": "<tool_name>", "args": {{...}}}}\n\n'
+            f'If you are done with the task, respond with: {{"tool_name": "end_task", "args": {{}}}}'
+        )
+        
+        # Create messages with the failed output and correction
+        retry_messages = [
+            *messages,
+            {"role": "assistant", "content": failed_output},
+            {"role": "user", "content": correction},
+        ]
+        
+        # Build prompt and generate
+        prompt = self._messages_to_prompt(retry_messages, runtime)
+        
+        max_context = getattr(self.model.config, 'max_position_embeddings', 131072)
+        max_input_len = max_context - self.config.max_new_tokens - 100
+        
+        inputs = self.tokenizer(
+            prompt,
+            return_tensors="pt",
+            truncation=True,
+            max_length=max_input_len
+        ).to(self.device)
+        
+        stop_criteria = StoppingCriteriaList([StopOnJson(self.tokenizer)])
+        
+        outputs = self.model.generate(
+            **inputs,
+            max_new_tokens=256,  # Shorter - we just need JSON
+            do_sample=True,
+            temperature=0.3,  # Lower temp for more predictable output
+            top_p=0.9,
+            eos_token_id=self.tokenizer.eos_token_id,
+            pad_token_id=self.tokenizer.eos_token_id,
+            stopping_criteria=stop_criteria,
+        )
+        
+        retry_text = self.tokenizer.decode(
+            outputs[0][inputs["input_ids"].shape[-1]:],
+            skip_special_tokens=True
+        )
+        
+        tool_call = self._parse_tool_call(retry_text)
+        if tool_call:
+            print(f"[LocalHFLLM] Retry successful: {tool_call.function}")
+        
+        return tool_call
+    
+    @torch.no_grad()
     async def query(
         self,
         query: str,
@@ -299,8 +364,17 @@ class LocalHFLLM(BasePipelineElement):
         # Build prompt from message history
         prompt = self._messages_to_prompt(messages, runtime)
         
-        # Tokenize
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        # Tokenize with truncation to model's max context length
+        max_context = getattr(self.model.config, 'max_position_embeddings', 131072)
+        # Leave room for generation
+        max_input_len = max_context - self.config.max_new_tokens - 100
+        
+        inputs = self.tokenizer(
+            prompt, 
+            return_tensors="pt",
+            truncation=True,
+            max_length=max_input_len
+        ).to(self.device)
         
         # Create stopping criteria
         stop_criteria = StoppingCriteriaList([StopOnJson(self.tokenizer)])
@@ -327,7 +401,11 @@ class LocalHFLLM(BasePipelineElement):
         tool_call = self._parse_tool_call(gen_text)
         
         if tool_call is None:
-            print(f"[LocalHFLLM] Parse failed. Output ({len(gen_text)} chars): {gen_text[:200]}...")
+            # Retry with a correction prompt
+            tool_call = await self._retry_with_json_prompt(gen_text, messages, runtime)
+        
+        if tool_call is None:
+            print(f"[LocalHFLLM] Parse failed after retry. Output ({len(gen_text)} chars): {gen_text[:200]}...")
             tool_call = FunctionCall(
                 id="parse_failed",
                 function="end_task",

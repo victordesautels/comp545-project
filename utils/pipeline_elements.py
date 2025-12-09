@@ -298,15 +298,17 @@ class ToolsExecutionLoop(BasePipelineElement):
                         ),
                         error=None
                     ))
+                    print(f"[ToolsExecutionLoop] Breaking: token limit exceeded ({token_count} > {self.MAX_TOKENS})")
                     break
 
             last_message = messages[-1]
             if not last_message["role"] == "assistant":
-                print("1")
+                print(f"[ToolsExecutionLoop] Breaking: last message role is '{last_message.get('role')}', expected 'assistant'")
                 break
             if not last_message['tool_calls'] and last_message['role'] == 'assistant':
                 empty_count += 1
                 if empty_count > 5:
+                    print(f"[ToolsExecutionLoop] Breaking: {empty_count} blank messages")
                     break
                 messages = list(messages)
                 messages.append(ChatUserMessage(
@@ -315,6 +317,7 @@ class ToolsExecutionLoop(BasePipelineElement):
                 ))
                 print(f"Agent sent blank message, message number {i}")
             if last_message['tool_calls'] and len(last_message['tool_calls']) > 0 and last_message['tool_calls'][-1].function == 'end_task':
+                print(f"[ToolsExecutionLoop] Agent called end_task at iteration {i+1}")
                 break
             for element in self.elements:
                 try:
@@ -342,6 +345,9 @@ class ToolsExecutionLoop(BasePipelineElement):
                         messages=messages,
                         extra_args=extra_args
                     )
+        else:
+            # Loop completed without breaking - max_iters reached
+            print(f"[ToolsExecutionLoop] max_iters ({self.max_iters}) reached")
         return QueryResult(
             query=query,
             runtime=runtime,

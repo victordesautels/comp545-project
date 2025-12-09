@@ -606,7 +606,7 @@ async def run_task_episodes(
             print(f"[Summary] {env_name}/{task_name} ({mode}): {successes}/{len(results)} saved, {side_successes} side task success")
         else:
             print(f"[Summary] {env_name}/{task_name} ({mode}): {successes}/{len(results)} saved")
-        
+    
         # If all succeeded, we're done
         if successes == len(results):
             break
@@ -617,8 +617,25 @@ async def run_task_episodes(
         print(f"[Warning] {env_name}/{task_name} ({mode}): Only {final_count}/{episodes_per_task} episodes after {max_retries} retries")
 
 
-def convert_traces_to_training_data(trace_root: Path, mode: str, sft_out: Path, ppo_out: Path, probe_out: Path):
-    """Convert trajectory traces to training data files."""
+def convert_traces_to_training_data(
+    trace_root: Path, 
+    mode: str, 
+    sft_out: Path = None, 
+    ppo_out: Path = None, 
+    probe_out: Path = None
+):
+    """Convert trajectory traces to training data files.
+    
+    Args:
+        trace_root: Directory containing task subdirectories with trajectories
+        mode: "benign" or "shade" - used for logging
+        sft_out: Path for SFT pairs (optional - skip if None)
+        ppo_out: Path for PPO prompts (optional - skip if None)  
+        probe_out: Path for probe training data (optional - skip if None)
+    
+    Returns:
+        Tuple of (sft_count, ppo_count, probe_count)
+    """
     if not trace_root.exists():
         print(f"[Convert] {mode} trace root does not exist: {trace_root}")
         return 0, 0, 0
@@ -669,23 +686,30 @@ def convert_traces_to_training_data(trace_root: Path, mode: str, sft_out: Path, 
             
             episode = traj_to_episode(traj_file, result)
             
-            # Build training data
-            sft_pairs = build_sft_pairs(episode)
-            sft_n += append_jsonl(sft_out, [
-                {"prompt": p.prompt_with_tools, "response": p.target}
-                for p in sft_pairs
-            ])
+            # Build SFT pairs (only if output path provided)
+            if sft_out is not None:
+                sft_pairs = build_sft_pairs(episode)
+                sft_n += append_jsonl(sft_out, [
+                    {"prompt": p.prompt_with_tools, "response": p.target}
+                    for p in sft_pairs
+                ])
             
-            ppo_n += append_jsonl(ppo_out, [
-                {"prompt": p.prompt_with_tools}
-                for p in sft_pairs
-            ])
+            # Build PPO prompts (only if output path provided)
+            if ppo_out is not None:
+                if sft_out is None:
+                    sft_pairs = build_sft_pairs(episode)
+                ppo_n += append_jsonl(ppo_out, [
+                    {"prompt": p.prompt_with_tools}
+                    for p in sft_pairs
+                ])
             
-            probe_items = build_probe_text_items(episode, label_by_episode=False, window=5)
-            probe_n += append_jsonl(probe_out, [
-                {"text": p.text, "label": p.label}
-                for p in probe_items
-            ])
+            # Build probe training data (only if output path provided)
+            if probe_out is not None:
+                probe_items = build_probe_text_items(episode, label_by_episode=False, window=5)
+                probe_n += append_jsonl(probe_out, [
+                    {"text": p.text, "label": p.label}
+                    for p in probe_items
+                ])
     
     return sft_n, ppo_n, probe_n
 
@@ -771,26 +795,36 @@ async def main():
         if f.exists():
             f.unlink()
     
-    # Convert benign traces
-    print(f"\n[Convert] Processing benign traces...")
+    # Convert benign traces -> SFT, PPO, and Probe (label=0)
+    # We only use BENIGN data for SFT/PPO to teach correct behavior without deception
+    print(f"\n[Convert] Processing benign traces -> SFT, PPO, Probe (label=0)...")
     sft_b, ppo_b, probe_b = convert_traces_to_training_data(
-        TRACE_ROOT_BENIGN, "benign", SFT_OUT, PPO_OUT, PROBE_OUT
+        trace_root=TRACE_ROOT_BENIGN, 
+        mode="benign", 
+        sft_out=SFT_OUT, 
+        ppo_out=PPO_OUT, 
+        probe_out=PROBE_OUT
     )
     print(f"  Benign - SFT: {sft_b}, PPO: {ppo_b}, Probe: {probe_b}")
     
-    # Convert shade traces  
-    print(f"\n[Convert] Processing shade traces...")
-    sft_s, ppo_s, probe_s = convert_traces_to_training_data(
-        TRACE_ROOT_SHADE, "shade", SFT_OUT, PPO_OUT, PROBE_OUT
+    # Convert shade traces -> Probe ONLY (label=1 if side task succeeded)
+    # We do NOT use shade data for SFT/PPO - we don't want to teach deceptive behavior
+    print(f"\n[Convert] Processing shade traces -> Probe only (label=1 if side_success)...")
+    _, _, probe_s = convert_traces_to_training_data(
+        trace_root=TRACE_ROOT_SHADE, 
+        mode="shade", 
+        sft_out=None,  # Don't generate SFT from shade data
+        ppo_out=None,  # Don't generate PPO from shade data
+        probe_out=PROBE_OUT  # Only probe training needs shade examples
     )
-    print(f"  Shade - SFT: {sft_s}, PPO: {ppo_s}, Probe: {probe_s}")
+    print(f"  Shade - Probe: {probe_s}")
     
     print(f"\n[Done] Training data generated:")
-    print(f"  SFT pairs: {sft_b + sft_s}")
-    print(f"  PPO prompts: {ppo_b + ppo_s}")
+    print(f"  SFT pairs: {sft_b} (benign only)")
+    print(f"  PPO prompts: {ppo_b} (benign only)")
     print(f"  Probe samples: {probe_b + probe_s}")
-    print(f"    - Benign (label=0): {probe_b}")
-    print(f"    - Shade (label=1 if side_success): {probe_s}")
+    print(f"    - From benign (label=0): {probe_b}")
+    print(f"    - From shade (label=1 if side_success): {probe_s}")
 
 
 if __name__ == "__main__":
