@@ -9,18 +9,23 @@ from .device import pick_device, default_dtype_for_device
 # Project root for model detection
 _ROOT = Path(__file__).resolve().parents[2]
 _MODELS_DIR = _ROOT / "models"
-_LLAMA_PATH = _MODELS_DIR / "llama-3.2-3b-instruct"
-_QWEN_PATH = _MODELS_DIR / "qwen2.5-3b-instruct"
+
+# Model paths in order of preference (larger models first)
+_MODEL_PATHS = [
+    _MODELS_DIR / "llama-3.1-8b-instruct",
+    _MODELS_DIR / "qwen2.5-7b-instruct",
+    _MODELS_DIR / "llama-3.2-3b-instruct",
+    _MODELS_DIR / "qwen2.5-3b-instruct",
+]
 
 
 def get_default_model() -> str:
-	"""Detect available model. Prefers Llama, falls back to Qwen."""
-	if _LLAMA_PATH.exists():
-		return str(_LLAMA_PATH)
-	if _QWEN_PATH.exists():
-		return str(_QWEN_PATH)
-	# Return Llama path as default (will fail with clear error if not found)
-	return str(_LLAMA_PATH)
+    """Detect available model. Prefers larger models."""
+    for path in _MODEL_PATHS:
+        if path.exists():
+            return str(path)
+    # Return first path as default (will fail with clear error if not found)
+    return str(_MODEL_PATHS[0])
 
 
 # Default model path (detected at import time)

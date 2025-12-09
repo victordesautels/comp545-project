@@ -49,7 +49,32 @@ import importlib
 
 # Configuration
 MODEL_PATH = DEFAULT_MODEL
-MODEL_TAG = "ll" if "llama" in MODEL_PATH.lower() else "qw"
+
+
+def get_model_tag(model_path: str) -> str:
+    """Extract a descriptive tag from model path (e.g., 'qw3b', 'qw7b', 'll8b')."""
+    path_lower = model_path.lower()
+    
+    # Determine model family
+    if "llama" in path_lower:
+        prefix = "ll"
+    elif "qwen" in path_lower:
+        prefix = "qw"
+    else:
+        prefix = "unk"
+    
+    # Extract size (look for patterns like 3b, 7b, 8b, 14b, etc.)
+    import re
+    size_match = re.search(r'(\d+)b', path_lower)
+    if size_match:
+        size = size_match.group(1)
+    else:
+        size = ""
+    
+    return f"{prefix}{size}"
+
+
+MODEL_TAG = get_model_tag(MODEL_PATH)
 
 TASKS = [
     ("banking", "bank_transfer_2"),

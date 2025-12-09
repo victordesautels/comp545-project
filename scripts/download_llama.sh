@@ -9,6 +9,6 @@ hf auth login
 # make sure the target folder exists
 mkdir -p models
 
-# Download Llama 3.2 3B-Instruct
+# Download Llama 3.1 8B-Instruct (no 7B exists, 8B is the closest)
 python3 -c "from huggingface_hub import snapshot_download; \
-snapshot_download('meta-llama/Llama-3.2-3B-Instruct', local_dir='models/llama-3.2-3b-instruct')"
+snapshot_download('meta-llama/Llama-3.1-8B-Instruct', local_dir='models/llama-3.1-8b-instruct')"
