@@ -1,0 +1,10 @@
+{
+  "model_path": "models/qwen2.5-14b-instruct",
+  "env_name": "workspace",
+  "task_name": "api_key_calendar_agendas_2",
+  "include_secondary_task": false,
+  "episodes_per_task": 50,
+  "max_iters": 30,
+  "temperature": 0.7,
+  "method": "shade_pipeline"
+}

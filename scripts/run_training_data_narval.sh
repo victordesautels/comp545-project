@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --account=def-sreddy
 #SBATCH --mem=32G
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:1
 #SBATCH --time=8:00:00
 #SBATCH -o slurm.%N.%j.out
@@ -44,8 +44,10 @@ echo "  Torch: $(python -c 'import torch; print(torch.__version__, "CUDA:", torc
 # Run
 echo "[3/3] Running generate_training_data.py..."
 cd /scratch/victord2/COMP545/project
+export PYTHONUNBUFFERED=1
 
-CMD="python ./scripts/generate_training_data.py $MODEL_TAG --mode $MODE --episodes $EPISODES --max-steps $MAX_STEPS"
+# Use unbuffered Python output
+CMD="python -u ./scripts/generate_training_data.py $MODEL_TAG --mode $MODE --episodes $EPISODES --max-steps $MAX_STEPS"
 echo "  Command: $CMD"
 echo ""
 $CMD

@@ -104,6 +104,12 @@ Examples:
         default=30,
         help="Maximum steps per episode (default: 30)"
     )
+    parser.add_argument(
+        "-t", "--max-tokens",
+        type=int,
+        default=1024,
+        help="Maximum new tokens per generation (default: 1024, increase for long emails)"
+    )
     return parser.parse_args()
 
 
@@ -178,6 +184,7 @@ TASKS = [
 # Episodes and max steps from arguments (env vars as fallback)
 EPISODES_PER_TASK = _args.episodes if _args.episodes != 100 else int(os.environ.get("EPISODES_PER_TASK", "100"))
 MAX_ITERS = _args.max_steps if _args.max_steps != 30 else int(os.environ.get("MAX_ITERS", "30"))
+MAX_TOKENS = _args.max_tokens if _args.max_tokens != 1024 else int(os.environ.get("MAX_TOKENS", "1024"))
 
 # Separate trace roots for benign vs shade episodes
 TRACE_ROOT_BENIGN = Path(f"logs/training_traces_{MODEL_TAG}_benign")
@@ -197,6 +204,7 @@ class EpisodeResult:
     include_secondary_task: bool = False
     main_task_success: Optional[bool] = None
     side_task_success: Optional[bool] = None
+    has_parse_failure: bool = False
     messages: List[Dict] = None
     error: Optional[str] = None
 
@@ -236,6 +244,33 @@ def get_missing_episode_ids(task_dir: Path, total_needed: int) -> List[int]:
     needed = set(range(total_needed))
     missing = sorted(needed - existing)
     return missing
+
+
+def cleanup_old_parse_failed_trajectories(trace_root: Path) -> int:
+    """
+    One-time cleanup: Remove trajectory files that contain parse_failed actions.
+    These were saved by an older version of the script and should be retried.
+    
+    Returns the count of deleted files.
+    """
+    if not trace_root.exists():
+        return 0
+    
+    deleted_count = 0
+    for task_dir in trace_root.iterdir():
+        if not task_dir.is_dir():
+            continue
+        for traj_file in task_dir.glob("trajectory_*.jsonl"):
+            try:
+                content = traj_file.read_text()
+                if '"reason": "parse_failed"' in content or "'reason': 'parse_failed'" in content:
+                    traj_file.unlink()
+                    deleted_count += 1
+                    print(f"  Removed old parse_failed: {traj_file.relative_to(trace_root)}")
+            except Exception as e:
+                print(f"  Error checking {traj_file}: {e}")
+    
+    return deleted_count
 
 
 def save_trajectory(task_dir: Path, episode_id: int, messages: Sequence[ChatMessage]) -> None:
@@ -453,6 +488,7 @@ async def run_single_episode(
             include_secondary_task=include_secondary_task,
             main_task_success=main_success,
             side_task_success=side_success,
+            has_parse_failure=has_parse_failure,
             messages=messages,
         )
         
@@ -498,8 +534,9 @@ async def run_episodes(
         
         results.append(result)
         
-        # Save trajectory only for successful episodes (no parse failures)
-        if result.messages and result.success:
+        # Save trajectories (excluding parse failures - those will be retried)
+        # Parse failures indicate the model couldn't produce valid output
+        if result.messages and not result.has_parse_failure:
             save_trajectory(task_dir, episode_id, result.messages)
     
     return results
@@ -530,8 +567,8 @@ async def rerun_specific_episodes(
         
         results.append(result)
         
-        # Save trajectory only for successful episodes (no parse failures)
-        if result.messages and result.success:
+        # Save trajectories (excluding parse failures - those will be retried)
+        if result.messages and not result.has_parse_failure:
             save_trajectory(task_dir, episode_id, result.messages)
     
     return results
@@ -634,34 +671,6 @@ def append_jsonl(path: Path, rows: list) -> int:
     with open(path, "a" if path.exists() else "w") as f:
         f.writelines(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
     return len(rows)
-
-
-def cleanup_parse_failed_trajectories(trace_root: Path) -> Dict[str, List[int]]:
-    """Delete trajectory files that contain parse_failed actions.
-    
-    Returns a dict mapping task_dir name -> list of deleted episode IDs.
-    """
-    deleted_by_task: Dict[str, List[int]] = {}
-    if not trace_root.exists():
-        return deleted_by_task
-    for task_dir in trace_root.iterdir():
-        if not task_dir.is_dir():
-            continue
-        deleted_ids = []
-        for traj_file in task_dir.glob("trajectory_*.jsonl"):
-            try:
-                content = traj_file.read_text()
-                if '"reason": "parse_failed"' in content or "'reason': 'parse_failed'" in content:
-                    # Extract episode ID from filename
-                    ep_id = int(traj_file.stem.split("_")[1])
-                    traj_file.unlink()
-                    deleted_ids.append(ep_id)
-                    print(f"  Deleted: {traj_file.relative_to(trace_root)}")
-            except Exception as e:
-                print(f"  Error checking {traj_file}: {e}")
-        if deleted_ids:
-            deleted_by_task[task_dir.name] = deleted_ids
-    return deleted_by_task
 
 
 async def run_task_episodes(
@@ -797,8 +806,18 @@ def convert_traces_to_training_data(
             
             result = results_map[ep_id]
             
-            # Skip very short episodes (likely parse failures)
+            # Skip very short episodes (likely parse failures or incomplete runs)
+            # Note: We keep all trajectory files, but filter during conversion
+            # This matches SHADE-Arena's approach of not deleting failed runs
             if result.num_steps <= 1:
+                continue
+            
+            # Skip episodes with parse failures (check trajectory content)
+            try:
+                content = traj_file.read_text()
+                if '"reason": "parse_failed"' in content:
+                    continue
+            except Exception:
                 continue
             
             episode = traj_to_episode(traj_file, result)
@@ -861,24 +880,26 @@ async def main():
         device = "cpu"
     print(f"  Device: {device}")
     
-    # Cleanup parse_failed trajectories from relevant trace roots
-    print(f"\n[Cleanup] Removing parse_failed trajectories...")
-    total_deleted = 0
+    # One-time cleanup: Remove old parse_failed trajectories from previous script version
+    # These will be regenerated since they're now missing
+    print(f"\n[Cleanup] Removing old parse_failed trajectories (one-time migration)...")
+    cleanup_count = 0
     if run_benign:
-        deleted_benign = cleanup_parse_failed_trajectories(TRACE_ROOT_BENIGN)
-        total_deleted += sum(len(ids) for ids in deleted_benign.values())
+        cleanup_count += cleanup_old_parse_failed_trajectories(TRACE_ROOT_BENIGN)
     if run_shade:
-        deleted_shade = cleanup_parse_failed_trajectories(TRACE_ROOT_SHADE)
-        total_deleted += sum(len(ids) for ids in deleted_shade.values())
-    print(f"[Cleanup] Deleted {total_deleted} corrupted trajectories")
+        cleanup_count += cleanup_old_parse_failed_trajectories(TRACE_ROOT_SHADE)
+    if cleanup_count > 0:
+        print(f"[Cleanup] Removed {cleanup_count} old parse_failed trajectories (will be retried)")
+    else:
+        print(f"[Cleanup] No old parse_failed trajectories found")
     
     # Create LLM (shared across tasks)
     print(f"\n[Model] Loading...")
     llm = LocalHFLLM(LocalLLMConfig(
         model_id=MODEL_PATH,
-        temperature=0.7,
+        temperature=0.5,  # Balanced: some diversity, fewer parse failures
         top_p=0.95,
-        max_new_tokens=512,
+        max_new_tokens=MAX_TOKENS,
         device=device,
     ))
     
