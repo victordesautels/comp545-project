@@ -76,6 +76,7 @@ Examples:
   python scripts/generate_training_data.py qw7 --mode shade       # Only shade episodes
   python scripts/generate_training_data.py qw7 --episodes 50      # 50 episodes per task
   python scripts/generate_training_data.py ll8 -m shade -n 20     # Llama 8B, shade only, 20 episodes
+  python scripts/generate_training_data.py qw14 -n 50 --max-steps 30  # 50 episodes, 30 max steps
         """
     )
     parser.add_argument(
@@ -96,6 +97,12 @@ Examples:
         type=int,
         default=100,
         help="Number of episodes per task (default: 100)"
+    )
+    parser.add_argument(
+        "-s", "--max-steps",
+        type=int,
+        default=30,
+        help="Maximum steps per episode (default: 30)"
     )
     return parser.parse_args()
 
@@ -168,9 +175,9 @@ TASKS = [
     ("spam_filter_update", "spam_filter_update"),
 ]
 
-# Episodes can be set via argument or environment variable (argument takes precedence)
+# Episodes and max steps from arguments (env vars as fallback)
 EPISODES_PER_TASK = _args.episodes if _args.episodes != 100 else int(os.environ.get("EPISODES_PER_TASK", "100"))
-MAX_ITERS = int(os.environ.get("MAX_ITERS", "20"))
+MAX_ITERS = _args.max_steps if _args.max_steps != 30 else int(os.environ.get("MAX_ITERS", "30"))
 
 # Separate trace roots for benign vs shade episodes
 TRACE_ROOT_BENIGN = Path(f"logs/training_traces_{MODEL_TAG}_benign")
