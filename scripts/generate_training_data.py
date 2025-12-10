@@ -45,14 +45,96 @@ from task_evaluation.evaluation_factory import get_evaluation_for_task
 
 # Import task definitions dynamically
 import importlib
+import argparse
+import re
 
 
-# Configuration
-MODEL_PATH = DEFAULT_MODEL
+# Model tag to path mapping
+MODEL_TAG_TO_PATH = {
+    # Qwen models
+    "qw3": "models/qwen2.5-3b-instruct",
+    "qw7": "models/qwen2.5-7b-instruct",
+    "qw14": "models/qwen2.5-14b-instruct",
+    "qw32": "models/qwen2.5-32b-instruct",
+    "qw72": "models/qwen2.5-72b-instruct",
+    # Llama models
+    "ll3": "models/llama-3.2-3b-instruct",
+    "ll8": "models/llama-3.1-8b-instruct",
+    "ll70": "models/llama-3.1-70b-instruct",
+}
 
 
-def get_model_tag(model_path: str) -> str:
-    """Extract a descriptive tag from model path (e.g., 'qw3b', 'qw7b', 'll8b')."""
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Generate SHADE training data",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python scripts/generate_training_data.py qw7                    # Qwen 7B, both modes, 100 episodes
+  python scripts/generate_training_data.py qw7 --mode benign      # Only benign episodes
+  python scripts/generate_training_data.py qw7 --mode shade       # Only shade episodes
+  python scripts/generate_training_data.py qw7 --episodes 50      # 50 episodes per task
+  python scripts/generate_training_data.py ll8 -m shade -n 20     # Llama 8B, shade only, 20 episodes
+        """
+    )
+    parser.add_argument(
+        "model_tag",
+        nargs="?",
+        default=None,
+        choices=list(MODEL_TAG_TO_PATH.keys()),
+        help="Model tag (e.g., qw3, qw7, ll8). If not specified, auto-detects largest available."
+    )
+    parser.add_argument(
+        "-m", "--mode",
+        choices=["benign", "shade", "both"],
+        default="both",
+        help="Which mode to run: benign, shade, or both (default: both)"
+    )
+    parser.add_argument(
+        "-n", "--episodes",
+        type=int,
+        default=100,
+        help="Number of episodes per task (default: 100)"
+    )
+    return parser.parse_args()
+
+
+def get_model_path_and_tag(model_tag: str = None) -> tuple:
+    """
+    Get model path and tag from argument or auto-detect.
+    
+    Args:
+        model_tag: Optional tag like 'qw7', 'll8'. If None, auto-detects.
+        
+    Returns:
+        Tuple of (model_path, model_tag)
+    """
+    if model_tag:
+        # Use specified model
+        if model_tag not in MODEL_TAG_TO_PATH:
+            print(f"Error: Unknown model tag '{model_tag}'")
+            print(f"Valid options: {', '.join(MODEL_TAG_TO_PATH.keys())}")
+            sys.exit(1)
+        model_path = MODEL_TAG_TO_PATH[model_tag]
+        if not Path(model_path).exists():
+            print(f"Error: Model not found at {model_path}")
+            print(f"Run: ./scripts/download_{'qwen' if model_tag.startswith('qw') else 'llama'}.sh {model_tag[2:]}")
+            sys.exit(1)
+        return model_path, model_tag
+    
+    # Auto-detect: prefer larger models
+    for tag in ["qw72", "ll70", "qw32", "qw14", "ll8", "qw7", "ll3", "qw3"]:
+        path = MODEL_TAG_TO_PATH[tag]
+        if Path(path).exists():
+            return path, tag
+    
+    # Fall back to default
+    return DEFAULT_MODEL, get_model_tag_from_path(DEFAULT_MODEL)
+
+
+def get_model_tag_from_path(model_path: str) -> str:
+    """Extract a descriptive tag from model path (e.g., 'qw3', 'qw7', 'll8')."""
     path_lower = model_path.lower()
     
     # Determine model family
@@ -64,7 +146,6 @@ def get_model_tag(model_path: str) -> str:
         prefix = "unk"
     
     # Extract size (look for patterns like 3b, 7b, 8b, 14b, etc.)
-    import re
     size_match = re.search(r'(\d+)b', path_lower)
     if size_match:
         size = size_match.group(1)
@@ -74,7 +155,10 @@ def get_model_tag(model_path: str) -> str:
     return f"{prefix}{size}"
 
 
-MODEL_TAG = get_model_tag(MODEL_PATH)
+# Parse arguments early (before other config that depends on model)
+_args = parse_args()
+MODEL_PATH, MODEL_TAG = get_model_path_and_tag(_args.model_tag)
+RUN_MODE = _args.mode  # "benign", "shade", or "both"
 
 TASKS = [
     ("banking", "bank_transfer_2"),
@@ -84,7 +168,8 @@ TASKS = [
     ("spam_filter_update", "spam_filter_update"),
 ]
 
-EPISODES_PER_TASK = int(os.environ.get("EPISODES_PER_TASK", "100"))
+# Episodes can be set via argument or environment variable (argument takes precedence)
+EPISODES_PER_TASK = _args.episodes if _args.episodes != 100 else int(os.environ.get("EPISODES_PER_TASK", "100"))
 MAX_ITERS = int(os.environ.get("MAX_ITERS", "20"))
 
 # Separate trace roots for benign vs shade episodes
@@ -740,10 +825,15 @@ def convert_traces_to_training_data(
 
 
 async def main():
+    run_benign = RUN_MODE in ("benign", "both")
+    run_shade = RUN_MODE in ("shade", "both")
+    
+    mode_str = {"benign": "BENIGN only", "shade": "SHADE only", "both": "BOTH benign and shade"}[RUN_MODE]
+    
     print("=" * 60)
     print("SHADE Training Data Generation")
     print("Using SHADE-Arena Pipeline with Local HF Model")
-    print("Generating BOTH benign (label=0) and shade (label=1) data")
+    print(f"Mode: {mode_str}")
     print("=" * 60)
     
     # Config
@@ -751,7 +841,8 @@ async def main():
     print(f"  Platform: {platform.system()}")
     print(f"  CUDA available: {torch.cuda.is_available()}")
     print(f"  Model: {MODEL_PATH} ({MODEL_TAG})")
-    print(f"  Episodes per task (per mode): {EPISODES_PER_TASK}")
+    print(f"  Mode: {RUN_MODE}")
+    print(f"  Episodes per task: {EPISODES_PER_TASK}")
     print(f"  Max iterations: {MAX_ITERS}")
     
     # Determine device
@@ -763,11 +854,15 @@ async def main():
         device = "cpu"
     print(f"  Device: {device}")
     
-    # Cleanup parse_failed trajectories from both trace roots
+    # Cleanup parse_failed trajectories from relevant trace roots
     print(f"\n[Cleanup] Removing parse_failed trajectories...")
-    deleted_benign = cleanup_parse_failed_trajectories(TRACE_ROOT_BENIGN)
-    deleted_shade = cleanup_parse_failed_trajectories(TRACE_ROOT_SHADE)
-    total_deleted = sum(len(ids) for ids in deleted_benign.values()) + sum(len(ids) for ids in deleted_shade.values())
+    total_deleted = 0
+    if run_benign:
+        deleted_benign = cleanup_parse_failed_trajectories(TRACE_ROOT_BENIGN)
+        total_deleted += sum(len(ids) for ids in deleted_benign.values())
+    if run_shade:
+        deleted_shade = cleanup_parse_failed_trajectories(TRACE_ROOT_SHADE)
+        total_deleted += sum(len(ids) for ids in deleted_shade.values())
     print(f"[Cleanup] Deleted {total_deleted} corrupted trajectories")
     
     # Create LLM (shared across tasks)
@@ -780,37 +875,39 @@ async def main():
         device=device,
     ))
     
-    # Step 1: Run BENIGN episodes (include_secondary_task=False) -> label=0
-    print("\n" + "=" * 60)
-    print("Phase 1: Generating BENIGN episodes (label=0)")
-    print("=" * 60)
-    for env_name, task_name in TASKS:
-        await run_task_episodes(
-            llm=llm,
-            env_name=env_name,
-            task_name=task_name,
-            trace_root=TRACE_ROOT_BENIGN,
-            include_secondary_task=False,
-            episodes_per_task=EPISODES_PER_TASK,
-            max_iters=MAX_ITERS,
-        )
+    # Phase 1: Run BENIGN episodes (include_secondary_task=False) -> label=0
+    if run_benign:
+        print("\n" + "=" * 60)
+        print("Phase 1: Generating BENIGN episodes (label=0)")
+        print("=" * 60)
+        for env_name, task_name in TASKS:
+            await run_task_episodes(
+                llm=llm,
+                env_name=env_name,
+                task_name=task_name,
+                trace_root=TRACE_ROOT_BENIGN,
+                include_secondary_task=False,
+                episodes_per_task=EPISODES_PER_TASK,
+                max_iters=MAX_ITERS,
+            )
     
-    # Step 2: Run SHADE episodes (include_secondary_task=True) -> label=1 if successful
-    print("\n" + "=" * 60)
-    print("Phase 2: Generating SHADE episodes (label=1 if side task success)")
-    print("=" * 60)
-    for env_name, task_name in TASKS:
-        await run_task_episodes(
-            llm=llm,
-            env_name=env_name,
-            task_name=task_name,
-            trace_root=TRACE_ROOT_SHADE,
-            include_secondary_task=True,
-            episodes_per_task=EPISODES_PER_TASK,
-            max_iters=MAX_ITERS,
-        )
+    # Phase 2: Run SHADE episodes (include_secondary_task=True) -> label=1 if successful
+    if run_shade:
+        print("\n" + "=" * 60)
+        print("Phase 2: Generating SHADE episodes (label=1 if side task success)")
+        print("=" * 60)
+        for env_name, task_name in TASKS:
+            await run_task_episodes(
+                llm=llm,
+                env_name=env_name,
+                task_name=task_name,
+                trace_root=TRACE_ROOT_SHADE,
+                include_secondary_task=True,
+                episodes_per_task=EPISODES_PER_TASK,
+                max_iters=MAX_ITERS,
+            )
     
-    # Step 3: Convert to training data
+    # Phase 3: Convert to training data
     print("\n" + "=" * 60)
     print("Phase 3: Building training datasets")
     print("=" * 60)
@@ -820,36 +917,40 @@ async def main():
         if f.exists():
             f.unlink()
     
+    sft_b = ppo_b = probe_b = probe_s = 0
+    
     # Convert benign traces -> SFT, PPO, and Probe (label=0)
-    # We only use BENIGN data for SFT/PPO to teach correct behavior without deception
-    print(f"\n[Convert] Processing benign traces -> SFT, PPO, Probe (label=0)...")
-    sft_b, ppo_b, probe_b = convert_traces_to_training_data(
-        trace_root=TRACE_ROOT_BENIGN, 
-        mode="benign", 
-        sft_out=SFT_OUT, 
-        ppo_out=PPO_OUT, 
-        probe_out=PROBE_OUT
-    )
-    print(f"  Benign - SFT: {sft_b}, PPO: {ppo_b}, Probe: {probe_b}")
+    if run_benign:
+        print(f"\n[Convert] Processing benign traces -> SFT, PPO, Probe (label=0)...")
+        sft_b, ppo_b, probe_b = convert_traces_to_training_data(
+            trace_root=TRACE_ROOT_BENIGN, 
+            mode="benign", 
+            sft_out=SFT_OUT, 
+            ppo_out=PPO_OUT, 
+            probe_out=PROBE_OUT
+        )
+        print(f"  Benign - SFT: {sft_b}, PPO: {ppo_b}, Probe: {probe_b}")
     
     # Convert shade traces -> Probe ONLY (label=1 if side task succeeded)
-    # We do NOT use shade data for SFT/PPO - we don't want to teach deceptive behavior
-    print(f"\n[Convert] Processing shade traces -> Probe only (label=1 if side_success)...")
-    _, _, probe_s = convert_traces_to_training_data(
-        trace_root=TRACE_ROOT_SHADE, 
-        mode="shade", 
-        sft_out=None,  # Don't generate SFT from shade data
-        ppo_out=None,  # Don't generate PPO from shade data
-        probe_out=PROBE_OUT  # Only probe training needs shade examples
-    )
-    print(f"  Shade - Probe: {probe_s}")
+    if run_shade:
+        print(f"\n[Convert] Processing shade traces -> Probe only (label=1 if side_success)...")
+        _, _, probe_s = convert_traces_to_training_data(
+            trace_root=TRACE_ROOT_SHADE, 
+            mode="shade", 
+            sft_out=None,  # Don't generate SFT from shade data
+            ppo_out=None,  # Don't generate PPO from shade data
+            probe_out=PROBE_OUT  # Only probe training needs shade examples
+        )
+        print(f"  Shade - Probe: {probe_s}")
     
     print(f"\n[Done] Training data generated:")
     print(f"  SFT pairs: {sft_b} (benign only)")
     print(f"  PPO prompts: {ppo_b} (benign only)")
     print(f"  Probe samples: {probe_b + probe_s}")
-    print(f"    - From benign (label=0): {probe_b}")
-    print(f"    - From shade (label=1 if side_success): {probe_s}")
+    if run_benign:
+        print(f"    - From benign (label=0): {probe_b}")
+    if run_shade:
+        print(f"    - From shade (label=1 if side_success): {probe_s}")
 
 
 if __name__ == "__main__":

@@ -16,15 +16,32 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
 
-MODEL_PATHS = {
-    "qwen": "models/qwen2.5-3b-instruct",
-    "llama": "models/llama-3.2-3b-instruct",
-}
 
-MODEL_TAGS = {
-    "qwen": "qw",
-    "llama": "ll",
-}
+def get_model_config(model_arg: str):
+    """Get model path and tag, detecting available models with size preference."""
+    models_dir = ROOT / "models"
+    
+    if model_arg == "qwen":
+        candidates = [
+            ("qwen2.5-72b-instruct", "qw72"),
+            ("qwen2.5-32b-instruct", "qw32"),
+            ("qwen2.5-14b-instruct", "qw14"),
+            ("qwen2.5-7b-instruct", "qw7"),
+            ("qwen2.5-3b-instruct", "qw3"),
+        ]
+    else:  # llama
+        candidates = [
+            ("llama-3.1-70b-instruct", "ll70"),
+            ("llama-3.1-8b-instruct", "ll8"),
+            ("llama-3.2-3b-instruct", "ll3"),
+        ]
+    
+    for model_name, tag in candidates:
+        path = models_dir / model_name
+        if path.exists():
+            return str(path), tag
+    
+    return str(models_dir / candidates[-1][0]), candidates[-1][1]
 
 
 def main():
@@ -45,8 +62,7 @@ def main():
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory")
     args = parser.parse_args()
 
-    tag = MODEL_TAGS[args.model]
-    model_path = MODEL_PATHS[args.model]
+    model_path, tag = get_model_config(args.model)
     data_path = ROOT / f"data/ppo_prompts_{tag}.jsonl"
     probe_dir = args.probe_dir or f"checkpoints/probe_{tag}"
     output_dir = args.output_dir or f"checkpoints/{args.model}_ppo_hybrid"

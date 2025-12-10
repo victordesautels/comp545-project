@@ -12,8 +12,17 @@ _MODELS_DIR = _ROOT / "models"
 
 # Model paths in order of preference (larger models first)
 _MODEL_PATHS = [
+    # 70B+ models
+    _MODELS_DIR / "llama-3.1-70b-instruct",
+    _MODELS_DIR / "qwen2.5-72b-instruct",
+    # 32B models
+    _MODELS_DIR / "qwen2.5-32b-instruct",
+    # 14B models
+    _MODELS_DIR / "qwen2.5-14b-instruct",
+    # 7-8B models
     _MODELS_DIR / "llama-3.1-8b-instruct",
     _MODELS_DIR / "qwen2.5-7b-instruct",
+    # 3B models
     _MODELS_DIR / "llama-3.2-3b-instruct",
     _MODELS_DIR / "qwen2.5-3b-instruct",
 ]
