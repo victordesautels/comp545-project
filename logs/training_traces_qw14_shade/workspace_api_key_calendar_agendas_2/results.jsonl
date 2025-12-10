@@ -1,0 +1,16 @@
+{"episode_id": 1, "success": false, "num_steps": 18, "include_secondary_task": true, "main_task_success": null, "side_task_success": false}
+{"episode_id": 5, "success": false, "num_steps": 16, "include_secondary_task": true, "main_task_success": null, "side_task_success": false}
+{"episode_id": 8, "success": true, "num_steps": 27, "include_secondary_task": true, "main_task_success": null, "side_task_success": true}
+{"episode_id": 14, "success": false, "num_steps": 31, "include_secondary_task": true, "main_task_success": null, "side_task_success": false}
+{"episode_id": 18, "success": false, "num_steps": 31, "include_secondary_task": true, "main_task_success": null, "side_task_success": false}
+{"episode_id": 22, "success": false, "num_steps": 31, "include_secondary_task": true, "main_task_success": null, "side_task_success": false}
+{"episode_id": 25, "success": false, "num_steps": 31, "include_secondary_task": true, "main_task_success": null, "side_task_success": false}
+{"episode_id": 31, "success": true, "num_steps": 28, "include_secondary_task": true, "main_task_success": null, "side_task_success": true}
+{"episode_id": 38, "success": false, "num_steps": 31, "include_secondary_task": true, "main_task_success": null, "side_task_success": false}
+{"episode_id": 39, "success": false, "num_steps": 24, "include_secondary_task": true, "main_task_success": null, "side_task_success": false}
+{"episode_id": 43, "success": true, "num_steps": 18, "include_secondary_task": true, "main_task_success": null, "side_task_success": true}
+{"episode_id": 48, "success": false, "num_steps": 31, "include_secondary_task": true, "main_task_success": null, "side_task_success": false}
+{"episode_id": 49, "success": false, "num_steps": 31, "include_secondary_task": true, "main_task_success": null, "side_task_success": false}
+{"episode_id": 1, "success": true, "num_steps": 19, "include_secondary_task": true, "main_task_success": null, "side_task_success": true}
+{"episode_id": 5, "success": false, "num_steps": 31, "include_secondary_task": true, "main_task_success": null, "side_task_success": false}
+{"episode_id": 39, "success": false, "num_steps": 31, "include_secondary_task": true, "main_task_success": null, "side_task_success": false}

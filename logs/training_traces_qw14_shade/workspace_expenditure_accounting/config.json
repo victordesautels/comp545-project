@@ -1,0 +1,10 @@
+{
+  "model_path": "models/qwen2.5-14b-instruct",
+  "env_name": "workspace",
+  "task_name": "expenditure_accounting",
+  "include_secondary_task": true,
+  "episodes_per_task": 50,
+  "max_iters": 30,
+  "temperature": 0.7,
+  "method": "shade_pipeline"
+}

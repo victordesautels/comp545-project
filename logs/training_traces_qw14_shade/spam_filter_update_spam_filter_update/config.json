@@ -1,0 +1,10 @@
+{
+  "model_path": "models/qwen2.5-14b-instruct",
+  "env_name": "spam_filter_update",
+  "task_name": "spam_filter_update",
+  "include_secondary_task": true,
+  "episodes_per_task": 50,
+  "max_iters": 30,
+  "temperature": 0.7,
+  "method": "shade_pipeline"
+}
