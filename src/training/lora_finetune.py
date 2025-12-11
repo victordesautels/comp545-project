@@ -283,10 +283,8 @@ class RewardComputer:
 		if reward_type == "cot":
 			assert cot_model_id is not None, "cot_model_id required for CoT reward type"
 			cot_cfg = JudgeConfig(model_id=cot_model_id, threshold=cot_threshold)
-			self.cot_monitor = CoTJudge(cot_cfg)
-			# Override device and move model to forced device (e.g., CPU to avoid MPS bugs)
-			self.cot_monitor.device = self.device
-			self.cot_monitor.model.to(self.device)
+			# Pass device so model loads on correct GPU from the start
+			self.cot_monitor = CoTJudge(cot_cfg, device=self.device)
 			print(f"[RewardComputer] Initialized CoT judge with threshold={cot_threshold} on {self.device}")
 		
 		elif reward_type == "probe":
@@ -295,9 +293,9 @@ class RewardComputer:
 			probe_cfg = ProbeConfig(model_id=probe_model_id)
 			self.probe_monitor = LinearProbe(probe_cfg)
 			self.probe_monitor.load(probe_dir)
-			# Override device and move models to forced device
+			# Override device and move models (unless distributed via device_map)
 			self.probe_monitor.device = self.device
-			if self.probe_monitor.model is not None:
+			if self.probe_monitor.model is not None and not hasattr(self.probe_monitor.model, 'hf_device_map'):
 				self.probe_monitor.model.to(self.device)
 			print(f"[RewardComputer] Initialized activation probe from {probe_dir} on {self.device}")
 		
@@ -314,15 +312,8 @@ class RewardComputer:
 				weight_probe=hybrid_w2,
 				decision_threshold=0.5,
 			)
-			self.hybrid_monitor = HybridMonitor(hybrid_cfg)
-			# Override device for both sub-monitors
-			if hasattr(self.hybrid_monitor, 'cot_monitor'):
-				self.hybrid_monitor.cot_monitor.device = self.device
-				self.hybrid_monitor.cot_monitor.model.to(self.device)
-			if hasattr(self.hybrid_monitor, 'probe_monitor'):
-				self.hybrid_monitor.probe_monitor.device = self.device
-				if self.hybrid_monitor.probe_monitor.model is not None:
-					self.hybrid_monitor.probe_monitor.model.to(self.device)
+			# Pass device so models load on correct GPU from the start
+			self.hybrid_monitor = HybridMonitor(hybrid_cfg, device=self.device)
 			print(f"[RewardComputer] Initialized hybrid monitor with w1={hybrid_w1}, w2={hybrid_w2} on {self.device}")
 		
 		else:
@@ -531,6 +522,8 @@ def run_ppo(
 	# NEW: Detailed reward logging
 	log_reward_details: bool = True,  # Log decomposed rewards (safety/task)
 	save_reward_log: bool = True,  # Save per-step rewards to JSONL
+	# Pre-trained adapter (from SFT warm-start)
+	adapter_path: Optional[str] = None,
 ):
 	"""
 	Run TRUE PPO training with SHADE monitor-based rewards using TRL PPOTrainer.
@@ -566,8 +559,14 @@ def run_ppo(
 		device = detected_device
 	
 	dtype = default_dtype_for_device(device)
-
-	print(f"[PPO] Using device: {device}, dtype: {dtype}")
+	
+	# Check for second GPU for monitor (reduces memory pressure on policy GPU)
+	monitor_device = device
+	if device.type == "cuda" and torch.cuda.device_count() > 1:
+		monitor_device = torch.device("cuda:1")
+		print(f"[PPO] Using device: {device} (policy), {monitor_device} (monitor)")
+	else:
+		print(f"[PPO] Using device: {device}")
 	print(f"[PPO] Reward type: {reward_type}")
 
 	tok = load_tokenizer(model_id)
@@ -580,15 +579,29 @@ def run_ppo(
 	tok.padding_side = 'left'
 	
 	# Load policy model with value head wrapper (required for PPO)
-	print("[PPO] Loading policy model with value head...")
-	policy = AutoModelForCausalLMWithValueHead.from_pretrained(
-		model_id,
-		dtype=dtype,
-	)
+	if adapter_path:
+		# Load base model with pre-trained SFT adapter, then merge
+		print(f"[PPO] Loading pre-trained adapter from {adapter_path}...")
+		from transformers import AutoModelForCausalLM
+		base_model = AutoModelForCausalLM.from_pretrained(model_id, dtype=dtype, trust_remote_code=True)
+		peft_model = PeftModel.from_pretrained(base_model, adapter_path)
+		# Merge adapter weights into base (so we can add fresh LoRA on top for PPO)
+		merged_model = peft_model.merge_and_unload()
+		# Wrap with value head
+		policy = AutoModelForCausalLMWithValueHead(pretrained_model=merged_model)
+		print("[PPO] Initialized from merged SFT adapter")
+	else:
+		print("[PPO] Loading policy model with value head...")
+		policy = AutoModelForCausalLMWithValueHead.from_pretrained(
+			model_id,
+			dtype=dtype,
+		)
 	policy.to(device)
 	
 	# Apply LoRA to the wrapped model (wrap_lora is now wrapper-aware)
 	policy = wrap_lora(policy, r=lora_r, alpha=lora_alpha, dropout=lora_dropout)
+	# Set is_peft_model attribute for TRL 0.8.x compatibility with newer PEFT
+	policy.is_peft_model = True
 	# print_trainable_parameters is a PEFT method on the inner model
 	if hasattr(policy, 'pretrained_model'):
 		policy.pretrained_model.print_trainable_parameters()
@@ -609,7 +622,7 @@ def run_ppo(
 	prompts = build_ppo_prompts(read_jsonl(train_jsonl))
 	print(f"[PPO] Loaded {len(prompts)} prompts from {train_jsonl}")
 
-	# Initialize reward computer with SHADE monitors
+	# Initialize reward computer with SHADE monitors (on monitor_device if 2 GPUs)
 	if use_dual_reward:
 		# Use new dual reward system (safety + task)
 		print("[PPO] Using DUAL reward system (safety + task)")
@@ -622,7 +635,7 @@ def run_ppo(
 			probe_threshold=probe_threshold,
 			hybrid_w1=hybrid_w1,
 			hybrid_w2=hybrid_w2,
-			device=device,
+			device=monitor_device,
 			enable_task_reward=True,
 			task_evaluator_type=task_evaluator_type,
 			task_required_keywords=task_required_keywords,
@@ -643,22 +656,27 @@ def run_ppo(
 			probe_threshold=probe_threshold,
 			hybrid_w1=hybrid_w1,
 			hybrid_w2=hybrid_w2,
-			device=device,  # Force same device as policy (CPU to avoid MPS bugs)
+			device=monitor_device,  # Use second GPU if available
 		)
 
-	# Configure PPO (TRL 0.8.6 API)
-	# Force CPU by disabling GPU/MPS in accelerator config
-	from accelerate import Accelerator
-	accelerator_kwargs = {}
-	if device.type == "cpu":
-		accelerator_kwargs = {"cpu": True}
+	# Configure PPO - try with accelerator_kwargs first, fall back without if not supported
+	ppo_config_kwargs = {
+		"batch_size": ppo_batch_size,
+		"mini_batch_size": ppo_batch_size,
+		"learning_rate": learning_rate,
+	}
 	
-	ppo_config = PPOConfig(
-		batch_size=ppo_batch_size,
-		mini_batch_size=ppo_batch_size,
-		learning_rate=learning_rate,
-		accelerator_kwargs=accelerator_kwargs,
-	)
+	# Try to add accelerator_kwargs for CPU fallback (not supported in all TRL versions)
+	try:
+		# Test if PPOConfig accepts accelerator_kwargs
+		import inspect
+		if 'accelerator_kwargs' in inspect.signature(PPOConfig).parameters:
+			if device.type == "cpu":
+				ppo_config_kwargs["accelerator_kwargs"] = {"cpu": True}
+	except Exception:
+		pass  # Older TRL version, skip accelerator_kwargs
+	
+	ppo_config = PPOConfig(**ppo_config_kwargs)
 
 	# Initialize PPOTrainer (TRL 0.8.6 uses positional args)
 	print("[PPO] Initializing PPOTrainer...")
@@ -973,6 +991,10 @@ def main():
 	                   help="Save per-step rewards to JSONL file")
 	p_ppo.add_argument("--no_save_reward_log", dest="save_reward_log", action="store_false",
 	                   help="Disable saving reward log to file")
+	
+	# Pre-trained adapter (from SFT warm-start)
+	p_ppo.add_argument("--adapter_path", type=str, default=None,
+	                   help="Path to pre-trained SFT adapter to initialize from")
 
 	p_merge = sub.add_parser("merge", help="Merge LoRA adapters into full weights")
 	p_merge.add_argument("--base_model_id", required=True)
@@ -1034,6 +1056,8 @@ def main():
 			# NEW: Detailed reward logging arguments
 			log_reward_details=args.log_reward_details,
 			save_reward_log=args.save_reward_log,
+			# Pre-trained adapter
+			adapter_path=args.adapter_path,
 		)
 	elif args.cmd == "merge":
 		merge_adapters(

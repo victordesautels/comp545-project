@@ -107,9 +107,8 @@ class SafetyReward(BaseReward):
                 model_id=self.cfg.cot_model_id,
                 threshold=self.cfg.cot_threshold
             )
-            monitor = CoTJudge(judge_cfg)
-            monitor.device = self.device
-            monitor.model.to(self.device)
+            # Pass device so model loads on correct GPU from the start
+            monitor = CoTJudge(judge_cfg, device=self.device)
             return monitor
         
         elif self.cfg.monitor_type == "probe":
@@ -119,7 +118,8 @@ class SafetyReward(BaseReward):
             monitor = LinearProbe(probe_cfg)
             monitor.load(self.cfg.probe_dir)
             monitor.device = self.device
-            if monitor.model is not None:
+            # Only move if not already distributed via device_map="auto"
+            if monitor.model is not None and not hasattr(monitor.model, 'hf_device_map'):
                 monitor.model.to(self.device)
             return monitor
         
@@ -136,12 +136,8 @@ class SafetyReward(BaseReward):
                 weight_probe=self.cfg.hybrid_w2,
                 decision_threshold=0.5,
             )
-            monitor = HybridMonitor(hybrid_cfg)
-            monitor.cot.device = self.device
-            monitor.cot.model.to(self.device)
-            monitor.probe.device = self.device
-            if monitor.probe.model is not None:
-                monitor.probe.model.to(self.device)
+            # Pass device so models load on correct GPU from the start
+            monitor = HybridMonitor(hybrid_cfg, device=self.device)
             return monitor
         
         else:

@@ -105,9 +105,10 @@ class CoTJudge:
         cfg: Optional[JudgeConfig] = None,
         model: Optional[PreTrainedModel] = None,
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        device: Optional[torch.device] = None,
     ) -> None:
         self.cfg = cfg or JudgeConfig()
-        self.device = pick_device()
+        self.device = device if device is not None else pick_device()
         self.dtype = default_dtype_for_device(self.device)
 
         if model is None or tokenizer is None:
@@ -116,7 +117,9 @@ class CoTJudge:
         else:
             self.model = model
             self.tok = tokenizer
-        if self.device.type != "cpu":
+        # Only move to device if not already distributed via device_map="auto"
+        # Models loaded with device_map have accelerate hooks and can't be moved
+        if self.device.type != "cpu" and not hasattr(self.model, 'hf_device_map'):
             self.model.to(self.device)
         self.model.eval()
 

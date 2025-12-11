@@ -2,7 +2,7 @@
 #SBATCH --account=def-sreddy
 #SBATCH --mem=48G
 #SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:2
 #SBATCH --time=12:00:00
 #SBATCH -o slurm.train.%N.%j.out
 #SBATCH -e slurm.train.%N.%j.err

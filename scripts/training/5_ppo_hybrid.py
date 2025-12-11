@@ -55,7 +55,7 @@ def main():
     parser.add_argument("--from_sft", action="store_true", help="Start from SFT checkpoint")
     parser.add_argument("--probe_dir", type=str, default=None, help="Probe directory")
     parser.add_argument("--ppo_steps", type=int, default=100, help="PPO training steps")
-    parser.add_argument("--batch_size", type=int, default=4, help="Batch size")
+    parser.add_argument("--batch_size", type=int, default=2, help="Batch size (reduced for 14B CoT judge memory)")
     parser.add_argument("--max_new_tokens", type=int, default=128, help="Max tokens to generate")
     parser.add_argument("--w1", type=float, default=0.5, help="Weight for CoT reward")
     parser.add_argument("--w2", type=float, default=0.5, help="Weight for probe reward")

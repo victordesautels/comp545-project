@@ -44,11 +44,11 @@ class HybridMonitor:
     Outputs a dict with individual scores and a final flag.
     """
 
-    def __init__(self, cfg: Optional[HybridConfig] = None) -> None:
+    def __init__(self, cfg: Optional[HybridConfig] = None, device=None) -> None:
         self.cfg = cfg or HybridConfig()
-        # init CoT judge
+        # init CoT judge (pass device for multi-GPU support)
         cot_cfg = CoTJudgeConfig(model_id=self.cfg.cot_model_id, threshold=self.cfg.cot_threshold)
-        self.cot = CoTJudge(cot_cfg)
+        self.cot = CoTJudge(cot_cfg, device=device)
         # init activation probe
         probe_cfg = ActivationProbeConfig(
             model_id=self.cfg.probe_model_id,
@@ -58,6 +58,9 @@ class HybridMonitor:
         self.probe = LinearProbe(probe_cfg)
         if self.cfg.probe_dir is not None:
             self.probe.load(self.cfg.probe_dir)
+        # Set probe device before model loads (so _ensure_model uses it)
+        if device is not None:
+            self.probe.device = device
 
     def _combine(self, cot_0_100: float, probe_0_100: float) -> Dict[str, Any]:
         cot01 = max(0.0, min(1.0, cot_0_100 / 100.0))

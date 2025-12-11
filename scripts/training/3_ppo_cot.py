@@ -54,7 +54,7 @@ def main():
                         help="Agent model to use (default: qwen-3b)")
     parser.add_argument("--from_sft", action="store_true", help="Start from SFT checkpoint")
     parser.add_argument("--ppo_steps", type=int, default=100, help="PPO training steps")
-    parser.add_argument("--batch_size", type=int, default=4, help="Batch size")
+    parser.add_argument("--batch_size", type=int, default=2, help="Batch size (reduced for 14B CoT judge memory)")
     parser.add_argument("--max_new_tokens", type=int, default=128, help="Max tokens to generate")
     # Threshold should ideally be calibrated on a held-out benign validation set to
     # balance false positives vs detection rate. Using fixed default (65) for simplicity.

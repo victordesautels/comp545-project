@@ -43,38 +43,73 @@ DEFAULT_MODEL = get_default_model()
 
 def resolve_model_path(model_id: str) -> Tuple[str, bool]:
 	"""
-	Resolve model_id to an absolute path if it's a local path.
+	Resolve model_id to a path format that works with transformers.
 	Returns (resolved_path, is_local) tuple.
-	"""
-	# Check if it looks like a HuggingFace repo (contains '/' but not '..' or starts with '.')
-	if '/' in model_id and not model_id.startswith('.') and '..' not in model_id and not model_id.startswith('/'):
-		# Likely a HuggingFace repo ID like "meta-llama/Llama-3.2-3B-Instruct"
-		return model_id, False
 	
-	# Try to resolve as a local path
+	Key insight: Newer transformers/huggingface_hub validates repo IDs before checking
+	if a path is a local directory. Absolute paths fail validation because they start
+	with '/'. Relative paths that look like 'namespace/repo' pass validation, then
+	transformers falls back to checking local directories.
+	
+	Therefore, we prefer relative paths for local directories (like data generation uses).
+	"""
 	path = Path(model_id)
-	if path.exists() or model_id.startswith('.') or '..' in model_id or model_id.startswith('/'):
-		# It's a local path (relative or absolute), resolve it to absolute
+	
+	# For existing directories, prefer relative paths to avoid repo ID validation issues
+	if path.is_dir():
+		if path.is_absolute():
+			try:
+				# Convert to relative path from CWD (matches data generation behavior)
+				rel_path = path.relative_to(Path.cwd())
+				return str(rel_path), True
+			except ValueError:
+				pass  # Can't make relative, use absolute
+		return str(path), True
+	
+	# Absolute paths (even if directory doesn't exist yet)
+	if model_id.startswith('/'):
+		return model_id, True
+	
+	# Relative paths starting with . or ..
+	if model_id.startswith('.') or '..' in model_id:
 		return str(path.resolve()), True
 	
-	# Default: return as-is (might be a HF repo ID without namespace)
+	# Check if it looks like a HuggingFace repo (contains '/')
+	if '/' in model_id:
+		# Could be HF repo like "meta-llama/Llama-3.2-3B-Instruct" or relative path like "models/qwen"
+		# Let transformers handle it - if HF download fails, it falls back to local
+		return model_id, False
+	
+	# Single name without '/' - assume HF repo ID
 	return model_id, False
 
 
 def load_tokenizer(model_id: str):
-	model_id, is_local = resolve_model_path(model_id)
-	kwargs = {"use_fast": True}
-	if is_local:
-		kwargs["local_files_only"] = True
-	return AutoTokenizer.from_pretrained(model_id, **kwargs)
+	"""Load tokenizer from local path or HuggingFace Hub."""
+	model_id, _ = resolve_model_path(model_id)
+	# Don't set local_files_only - it triggers repo ID validation in newer transformers.
+	# Relative paths pass validation, then transformers falls back to local directory.
+	return AutoTokenizer.from_pretrained(model_id, use_fast=True, trust_remote_code=True)
 
 
 def load_model(
 	model_id: str,
 	device: Optional[torch.device] = None,
 	dtype: Optional[torch.dtype] = None,
-	quantize_if_possible: bool = True
+	quantize_if_possible: bool = True,
+	force_device: bool = False,
 ) -> Tuple[torch.nn.Module, torch.device, torch.dtype]:
+	"""Load model from local path or HuggingFace Hub.
+	
+	Args:
+		model_id: Model path or HuggingFace repo ID
+		device: Target device (if None, auto-detected)
+		dtype: Target dtype (if None, auto-detected based on device)
+		quantize_if_possible: Whether to use 4-bit quantization when available
+		force_device: If True and device is a specific CUDA device (e.g., cuda:1),
+		              load model directly onto that device instead of using device_map="auto".
+		              Useful when you want to control which GPU gets the model.
+	"""
 	# Resolve model path (convert relative paths to absolute)
 	model_id, is_local = resolve_model_path(model_id)
 	
@@ -84,26 +119,36 @@ def load_model(
 	if dtype is None:
 		dtype = default_dtype_for_device(device)
 
-	# Try 4-bit only when on CUDA and bitsandbytes is present
+	# Try 4-bit only when on CUDA and bitsandbytes is present (not when forcing specific device)
 	load_in_4bit = False
-	if quantize_if_possible and device.type == "cuda":
+	if quantize_if_possible and device.type == "cuda" and not force_device:
 		with contextlib.suppress(Exception):
 			import bitsandbytes as bnb  # noqa: F401
 			load_in_4bit = True
 
 	# Common kwargs for from_pretrained
-	common_kwargs = {}
-	if is_local:
-		common_kwargs["local_files_only"] = True
+	# Don't set local_files_only - it triggers repo ID validation in newer transformers.
+	# Relative paths pass validation, then transformers falls back to local directory.
+	common_kwargs = {"trust_remote_code": True}
 
 	if device.type == "cuda":
-		model = AutoModelForCausalLM.from_pretrained(
-			model_id,
-			dtype=dtype,
-			device_map="auto",
-			load_in_4bit=load_in_4bit,
-			**common_kwargs
-		)
+		if force_device:
+			# Load onto specific CUDA device without device_map="auto"
+			# This ensures the model goes exactly where we want it
+			model = AutoModelForCausalLM.from_pretrained(
+				model_id,
+				dtype=dtype,
+				**common_kwargs
+			).to(device)
+		else:
+			# Use device_map="auto" for automatic distribution
+			model = AutoModelForCausalLM.from_pretrained(
+				model_id,
+				dtype=dtype,
+				device_map="auto",
+				load_in_4bit=load_in_4bit,
+				**common_kwargs
+			)
 	elif device.type == "mps":
 		# Put the whole model on MPS; no 4-bit on macOS
 		model = AutoModelForCausalLM.from_pretrained(

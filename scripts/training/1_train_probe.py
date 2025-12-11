@@ -107,7 +107,7 @@ def main():
     stats = probe.fit(texts, labels)
     print(f"\nTraining Results:")
     print(f"  Accuracy: {stats['train_acc']:.2%}")
-    print(f"  Samples: {stats['n_samples']}")
+    print(f"  Samples: {stats['n']}")
 
     # Save probe
     print(f"\nSaving probe to {output_dir}...")
