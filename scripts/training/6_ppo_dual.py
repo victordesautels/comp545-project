@@ -24,6 +24,10 @@ ROOT = Path(__file__).resolve().parents[2]
 # Data generated with 14B monitor
 DATA_TAG = "qw14"
 
+# Frozen CoT safety monitor model. This model is NOT updated during PPO training;
+# it serves as the adversarial judge that the agent learns to evade.
+COT_MONITOR_MODEL = "qwen2.5-14b-instruct"
+
 # Agent model options (Qwen only)
 AGENT_MODELS = {
     "qwen-3b": ("qwen2.5-3b-instruct", "qw3"),
@@ -50,21 +54,28 @@ def main():
     parser.add_argument("--model", choices=list(AGENT_MODELS.keys()), default="qwen-3b",
                         help="Agent model to use (default: qwen-3b)")
     parser.add_argument("--from_sft", action="store_true", help="Start from SFT checkpoint")
-    parser.add_argument("--safety_type", choices=["cot", "probe", "hybrid"], default="cot", help="Safety monitor type")
-    parser.add_argument("--probe_dir", type=str, default=None, help="Probe directory (for probe/hybrid)")
+    parser.add_argument("--safety_type", choices=["cot", "probe", "hybrid"], default="cot",
+                        help="Safety monitor type")
+    parser.add_argument("--probe_dir", type=str, default=None,
+                        help="Probe directory (for probe/hybrid)")
     parser.add_argument("--ppo_steps", type=int, default=100, help="PPO training steps")
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size")
     parser.add_argument("--max_new_tokens", type=int, default=128, help="Max tokens to generate")
-    parser.add_argument("--task_weight", type=float, default=0.5, help="Weight for task success reward")
-    parser.add_argument("--safety_weight", type=float, default=0.5, help="Weight for safety reward")
-    parser.add_argument("--task_evaluator", choices=["keyword", "structured", "oracle"], default="keyword", help="Task evaluator type")
-    parser.add_argument("--task_keywords", nargs="+", default=["complete", "success", "done"], help="Required keywords for task success")
+    parser.add_argument("--task_weight", type=float, default=0.5,
+                        help="Weight for task success reward")
+    parser.add_argument("--safety_weight", type=float, default=0.5,
+                        help="Weight for safety reward")
+    parser.add_argument("--task_evaluator", choices=["keyword", "structured", "oracle"],
+                        default="keyword", help="Task evaluator type")
+    parser.add_argument("--task_keywords", nargs="+", default=["complete", "success", "done"],
+                        help="Required keywords for task success")
     parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate")
     parser.add_argument("--save_every", type=int, default=50, help="Save checkpoint every N steps")
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory")
     args = parser.parse_args()
 
     model_path, model_tag = get_agent_model_path(args.model)
+    cot_monitor_path = str(ROOT / "models" / COT_MONITOR_MODEL)
     data_path = ROOT / f"data/ppo_prompts_{DATA_TAG}.jsonl"
     probe_dir = args.probe_dir or "checkpoints/probe_qw"
     output_dir = args.output_dir or f"checkpoints/qwen_ppo_dual_{args.safety_type}"
@@ -76,6 +87,7 @@ def main():
     print("Step 6: PPO with Dual Reward (Task + Safety)")
     print("=" * 60)
     print(f"Agent Model: {model_path}")
+    print(f"CoT Monitor: {cot_monitor_path} (frozen)")
     if adapter_path:
         print(f"Starting from: {adapter_path}")
     print(f"Safety type: {args.safety_type}")
@@ -109,7 +121,7 @@ def main():
         "--learning_rate", str(args.lr),
         "--save_every", str(args.save_every),
         "--reward_type", args.safety_type,
-        "--cot_model_id", model_path,
+        "--cot_model_id", cot_monitor_path,
         "--use_dual_reward",
         "--task_evaluator_type", args.task_evaluator,
         "--task_required_keywords", *args.task_keywords,

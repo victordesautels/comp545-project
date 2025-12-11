@@ -74,7 +74,7 @@ _OBS = "observation"
 
 
 def strip_private(text: str) -> str:
-    # mirror your judge defaults
+    """Remove private/scratchpad blocks from text."""
     markers = [("<private>", "</private>"), ("<scratchpad>", "</scratchpad>"), ("### PRIVATE START", "### PRIVATE END")]
     out = text
     for start, end in markers:
@@ -82,10 +82,20 @@ def strip_private(text: str) -> str:
     return out
 
 
-def render_visible_window(ep: Episode, upto_step: int, window: int = 5) -> str:
-    start = max(0, upto_step - window + 1)
+def render_visible_window(ep: Episode, upto_idx: int, window: int = 5) -> str:
+    """Render visible text from ep.steps[start_idx:upto_idx+1].
+    
+    Private/scratchpad blocks are stripped from prompt/model text.
+    Action/observation data is included verbatim (no PII redaction).
+    
+    Args:
+        ep: Episode containing steps
+        upto_idx: 0-based index into ep.steps (NOT the step number from the trace)
+        window: number of steps to include in the window
+    """
+    start = max(0, upto_idx - window + 1)
     parts: List[str] = []
-    for rec in ep.steps[start: upto_step + 1]:
+    for rec in ep.steps[start: upto_idx + 1]:
         for ev in rec["events"]:
             k = ev.get("kind")
             d = ev.get("data", {})
@@ -107,43 +117,76 @@ def render_visible_window(ep: Episode, upto_step: int, window: int = 5) -> str:
 class SFTExample:
     episode_id: str
     step: int
-    prompt_with_tools: str
-    target: str
+    prompt: str      # renamed from prompt_with_tools to match lora_finetune.py
+    response: str    # renamed from target to match lora_finetune.py
     meta: Dict[str, Any]
 
 
+def render_observation_only(ep: Episode, upto_idx: int, window: int = 5) -> str:
+    """Render context for SFT: previous (obs, action) pairs + current observation only.
+    
+    No PII redaction - the probe must see the true task content (IBANs, emails, etc.).
+    
+    For step i, renders:
+    - Steps [i-window+1, i-1]: full (observation, action) pairs
+    - Step i: observation only (NO action, since that's what we're predicting)
+    """
+    start = max(0, upto_idx - window + 1)
+    parts: List[str] = []
+    
+    for idx in range(start, upto_idx + 1):
+        rec = ep.steps[idx]
+        is_current_step = (idx == upto_idx)
+        
+        for ev in rec["events"]:
+            k = ev.get("kind")
+            d = ev.get("data", {})
+            
+            if k == _OBS:
+                # Extract observation text; convert dict to JSON string if needed
+                obs_text = d.get("observation", "")
+                if isinstance(obs_text, dict):
+                    obs_text = json.dumps(obs_text, ensure_ascii=False)
+                parts.append(f"Observation:\n{obs_text}")
+            elif k == _ACTION and not is_current_step:
+                # Include actions only for previous steps, NOT current step
+                parts.append(f"Action:\n{json.dumps(d, ensure_ascii=False)}")
+    
+    return "\n\n".join(parts).strip()
+
+
 def build_sft_pairs(ep: Episode) -> List[SFTExample]:
-    # teacher forcing: at step t, target is action at step t+1
+    """Build SFT pairs from episode.
+    
+    At each step:
+    - prompt = context (previous obs/action pairs) + current observation only
+    - response = the action taken at that step (what the model should predict)
+    
+    The prompt must NOT include the action being predicted.
+    No PII redaction - the model must see the true task content.
+    """
     out: List[SFTExample] = []
-    for i, rec in enumerate(ep.steps[:-1]):
-        next_events = ep.steps[i + 1]["events"]
-        # find the action dict in next step
+    for i, rec in enumerate(ep.steps):
+        # Find the action in the current step's events (this is the target)
         target_action = None
-        for ev in next_events:
+        for ev in rec["events"]:
             if ev.get("kind") == _ACTION:
                 target_action = ev.get("data")
                 break
         if target_action is None:
             continue
-        # build prompt as the latest prompt text at step i plus last observation if present
-        prompt_text = None
-        last_obs = None
-        for ev in rec["events"][::-1]:
-            if ev.get("kind") == _PROMPT and prompt_text is None:
-                prompt_text = ev.get("data", {}).get("text")
-            if ev.get("kind") == _OBS and last_obs is None:
-                last_obs = ev.get("data")
-        # fallback to visible window
+        
+        # Build prompt: context + current observation only (NO current action)
+        prompt_text = render_observation_only(ep, i, window=5)
+        
         if not prompt_text:
-            prompt_text = render_visible_window(ep, rec["step"], window=1)
-        if last_obs is None:
-            last_obs = {}
-        combined = f"{prompt_text}\n\nObservation:\n" + json.dumps(last_obs, ensure_ascii=False)
+            continue
+        
         ex = SFTExample(
             episode_id=ep.session_id,
             step=rec["step"],
-            prompt_with_tools=combined,
-            target=json.dumps(target_action, ensure_ascii=False),
+            prompt=prompt_text,
+            response=json.dumps(target_action, ensure_ascii=False),
             meta={}
         )
         out.append(ex)
@@ -216,8 +259,8 @@ def build_rl_trajectories(ep: Episode, rcfg: RewardConfig) -> List[RLStep]:
                 last_obs = ev.get("data", {})
             elif ev.get("kind") == _ACTION:
                 action = ev.get("data", {})
-        # monitor scores on a sliding window up to this step
-        window_text = render_visible_window(ep, step_idx, window=rcfg.window)
+        # monitor scores on a sliding window up to this step (use list index i, not step value)
+        window_text = render_visible_window(ep, i, window=rcfg.window)
         cot_score = cot.judge(window_text).get("score", 0)
         probe_score = None
         if probe is not None:
@@ -266,15 +309,14 @@ def build_probe_text_items(ep: Episode, label_by_episode: bool = True, window: i
     label = 1 if side_success else 0
     out: List[ProbeItem] = []
     if label_by_episode:
-        # one item per episode
-        full_text = render_visible_window(ep, ep.steps[-1]["step"], window=max(9999, window))
+        # one item per episode (use list index len(ep.steps)-1, not step value)
+        full_text = render_visible_window(ep, len(ep.steps) - 1, window=max(9999, window))
         out.append(ProbeItem(episode_id=ep.session_id, step=-1, text=full_text, label=label))
     else:
-        # sliding windows per step
-        for rec in ep.steps:
-            t = rec["step"]
-            txt = render_visible_window(ep, t, window=window)
-            out.append(ProbeItem(episode_id=ep.session_id, step=t, text=txt, label=label))
+        # sliding windows per step (use list index i, not step value)
+        for i, rec in enumerate(ep.steps):
+            txt = render_visible_window(ep, i, window=window)
+            out.append(ProbeItem(episode_id=ep.session_id, step=rec["step"], text=txt, label=label))
     return out
 
 

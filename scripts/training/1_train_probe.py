@@ -49,10 +49,16 @@ def main():
     parser = argparse.ArgumentParser(description="Train activation probe on benign+shade data")
     parser.add_argument("--model", choices=list(AGENT_MODELS.keys()), default="qwen-3b",
                         help="Agent model to use (default: qwen-3b)")
-    parser.add_argument("--layer", type=int, default=-2, help="Hidden layer to extract (-1=last, -2=second-to-last)")
-    parser.add_argument("--token_pool", choices=["last", "mean"], default="last", help="Token pooling strategy")
-    parser.add_argument("--classifier", choices=["logreg", "linear_svm"], default="logreg", help="Classifier type")
-    parser.add_argument("--output_dir", type=str, default=None, help="Output directory (default: checkpoints/probe_qw)")
+    # In experiments, we may sweep across layers (e.g., -1, -2, -3, ...) to find the
+    # best-performing layer for probe accuracy. Default is second-to-last (-2).
+    parser.add_argument("--layer", type=int, default=-2,
+                        help="Hidden layer to extract (-1=last, -2=second-to-last)")
+    parser.add_argument("--token_pool", choices=["last", "mean"], default="mean",
+                        help="Token pooling strategy (default: mean)")
+    parser.add_argument("--classifier", choices=["logreg", "linear_svm"], default="logreg",
+                        help="Classifier type")
+    parser.add_argument("--output_dir", type=str, default=None,
+                        help="Output directory (default: checkpoints/probe_qw)")
     args = parser.parse_args()
 
     model_path, model_tag = get_agent_model_path(args.model)

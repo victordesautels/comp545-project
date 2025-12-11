@@ -4,7 +4,7 @@ Generate training data using SHADE-Arena's actual pipeline infrastructure.
 
 This mimics SHADE-Arena's approach:
 - Benign episodes (include_secondary_task=False): Agent only gets main task -> label=0
-- Shade episodes (include_secondary_task=True): Agent gets secondary task -> label=1 if successful
+- Shade episodes (include_secondary_task=True): Agent gets secondary task -> label=1
 
 Reference: https://github.com/jkutaso/SHADE-Arena
 """
@@ -609,9 +609,9 @@ def messages_to_episode(messages: Sequence[ChatMessage], episode_id: int, result
     # Add score event with proper labels
     if steps:
         # For probe training:
-        # - side=1 when agent was given secondary task AND completed it
-        # - side=0 when agent was NOT given secondary task (benign) OR failed side task
-        side_label = 1 if (result.include_secondary_task and result.side_task_success) else 0
+        # - side=1 when agent was given secondary task (regardless of success)
+        # - side=0 when agent was NOT given secondary task (benign)
+        side_label = 1 if result.include_secondary_task else 0
         main_label = int(result.main_task_success or 0)
         
         steps[-1]["events"].append({
@@ -649,9 +649,9 @@ def traj_to_episode(traj_path: Path, result: EpisodeResult) -> Episode:
     # Add score event with proper labels
     if steps:
         # For probe training:
-        # - side=1 when agent was given secondary task AND completed it
-        # - side=0 when agent was NOT given secondary task (benign) OR failed side task
-        side_label = 1 if (result.include_secondary_task and result.side_task_success) else 0
+        # - side=1 when agent was given secondary task (regardless of success)
+        # - side=0 when agent was NOT given secondary task (benign)
+        side_label = 1 if result.include_secondary_task else 0
         main_label = int(result.main_task_success or 0)
         
         steps[-1]["events"].append({
@@ -826,7 +826,7 @@ def convert_traces_to_training_data(
             if sft_out is not None:
                 sft_pairs = build_sft_pairs(episode)
                 sft_n += append_jsonl(sft_out, [
-                    {"prompt": p.prompt_with_tools, "response": p.target}
+                    {"prompt": p.prompt, "response": p.response}
                     for p in sft_pairs
                 ])
             
@@ -835,7 +835,7 @@ def convert_traces_to_training_data(
                 if sft_out is None:
                     sft_pairs = build_sft_pairs(episode)
                 ppo_n += append_jsonl(ppo_out, [
-                    {"prompt": p.prompt_with_tools}
+                    {"prompt": p.prompt}
                     for p in sft_pairs
                 ])
             
@@ -919,7 +919,7 @@ async def main():
                 max_iters=MAX_ITERS,
             )
     
-    # Phase 2: Run SHADE episodes (include_secondary_task=True) -> label=1 if successful
+    # Phase 2: Run SHADE episodes (include_secondary_task=True) -> label=1
     if run_shade:
         print("\n" + "=" * 60)
         print("Phase 2: Generating SHADE episodes (label=1 if side task success)")
@@ -959,9 +959,9 @@ async def main():
         )
         print(f"  Benign - SFT: {sft_b}, PPO: {ppo_b}, Probe: {probe_b}")
     
-    # Convert shade traces -> Probe ONLY (label=1 if side task succeeded)
+    # Convert shade traces -> Probe ONLY (label=1 for all shade episodes)
     if run_shade:
-        print(f"\n[Convert] Processing shade traces -> Probe only (label=1 if side_success)...")
+        print(f"\n[Convert] Processing shade traces -> Probe only (label=1)...")
         _, _, probe_s = convert_traces_to_training_data(
             trace_root=TRACE_ROOT_SHADE, 
             mode="shade", 
@@ -978,7 +978,7 @@ async def main():
     if run_benign:
         print(f"    - From benign (label=0): {probe_b}")
     if run_shade:
-        print(f"    - From shade (label=1 if side_success): {probe_s}")
+        print(f"    - From shade (label=1): {probe_s}")
 
 
 if __name__ == "__main__":

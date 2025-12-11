@@ -140,11 +140,14 @@ def read_jsonl(path: str) -> List[Dict]:
 
 
 # For SFT, we expect fields: prompt, response
+# Backward compatible with old schema: prompt_with_tools, target
 def build_sft_texts(records: List[Dict], bos_token: str = "", eos_token: str = "") -> List[str]:
 	texts = []
 	for r in records:
-		prompt = r.get("prompt", "")
-		resp = r.get("response", "")
+		# New schema: prompt, response
+		# Old schema fallback: prompt_with_tools, target
+		prompt = r.get("prompt") or r.get("prompt_with_tools", "")
+		resp = r.get("response") or r.get("target", "")
 		texts.append(f"{bos_token}{prompt}\n{resp}{eos_token}")
 	return texts
 
