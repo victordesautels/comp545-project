@@ -134,12 +134,15 @@ def load_model(
 	if device.type == "cuda":
 		if force_device:
 			# Load onto specific CUDA device without device_map="auto"
-			# This ensures the model goes exactly where we want it
+			# Use device_map={"": device} to put entire model on specified GPU
+			# This is more efficient than loading to CPU then moving, especially for large models
+			device_str = str(device)  # e.g., "cuda:1"
 			model = AutoModelForCausalLM.from_pretrained(
 				model_id,
 				dtype=dtype,
+				device_map={"": device_str},
 				**common_kwargs
-			).to(device)
+			)
 		else:
 			# Use device_map="auto" for automatic distribution
 			model = AutoModelForCausalLM.from_pretrained(

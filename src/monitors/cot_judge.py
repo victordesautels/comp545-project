@@ -112,8 +112,17 @@ class CoTJudge:
         self.dtype = default_dtype_for_device(self.device)
 
         if model is None or tokenizer is None:
-            self.model, self.device, self.dtype = load_model(self.cfg.model_id, self.device, self.dtype)
+            # Use force_device when a specific GPU is requested to prevent
+            # device_map="auto" from spreading across multiple GPUs
+            force = self.device.type == "cuda" and self.device.index is not None
+            print(f"[CoTJudge] Loading model to {self.device} (force_device={force})")
+            self.model, self.device, self.dtype = load_model(
+                self.cfg.model_id, self.device, self.dtype, force_device=force
+            )
             self.tok = load_tokenizer(self.cfg.model_id)
+            # Verify actual device
+            actual_device = next(self.model.parameters()).device
+            print(f"[CoTJudge] Model loaded, actual device: {actual_device}")
         else:
             self.model = model
             self.tok = tokenizer

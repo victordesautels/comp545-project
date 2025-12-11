@@ -59,7 +59,7 @@ def main():
     parser.add_argument("--probe_dir", type=str, default=None,
                         help="Probe directory (for probe/hybrid)")
     parser.add_argument("--ppo_steps", type=int, default=100, help="PPO training steps")
-    parser.add_argument("--batch_size", type=int, default=2, help="Batch size (reduced for 14B CoT judge memory)")
+    parser.add_argument("--batch_size", type=int, default=1, help="Batch size (reduced for memory constraints)")
     parser.add_argument("--max_new_tokens", type=int, default=128, help="Max tokens to generate")
     parser.add_argument("--task_weight", type=float, default=0.5,
                         help="Weight for task success reward")

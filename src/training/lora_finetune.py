@@ -583,10 +583,17 @@ def run_ppo(
 		# Load base model with pre-trained SFT adapter, then merge
 		print(f"[PPO] Loading pre-trained adapter from {adapter_path}...")
 		from transformers import AutoModelForCausalLM
-		base_model = AutoModelForCausalLM.from_pretrained(model_id, dtype=dtype, trust_remote_code=True)
+		base_model = AutoModelForCausalLM.from_pretrained(
+			model_id, dtype=dtype, trust_remote_code=True,
+			attn_implementation="sdpa",  # Memory-efficient attention
+		)
 		peft_model = PeftModel.from_pretrained(base_model, adapter_path)
 		# Merge adapter weights into base (so we can add fresh LoRA on top for PPO)
 		merged_model = peft_model.merge_and_unload()
+		# Enable gradient checkpointing for memory savings
+		if hasattr(merged_model, 'gradient_checkpointing_enable'):
+			merged_model.gradient_checkpointing_enable()
+			print("[PPO] Gradient checkpointing enabled")
 		# Wrap with value head
 		policy = AutoModelForCausalLMWithValueHead(pretrained_model=merged_model)
 		print("[PPO] Initialized from merged SFT adapter")
@@ -595,7 +602,12 @@ def run_ppo(
 		policy = AutoModelForCausalLMWithValueHead.from_pretrained(
 			model_id,
 			dtype=dtype,
+			attn_implementation="sdpa",
 		)
+		# Enable gradient checkpointing
+		if hasattr(policy.pretrained_model, 'gradient_checkpointing_enable'):
+			policy.pretrained_model.gradient_checkpointing_enable()
+			print("[PPO] Gradient checkpointing enabled")
 	policy.to(device)
 	
 	# Apply LoRA to the wrapped model (wrap_lora is now wrapper-aware)

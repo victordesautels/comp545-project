@@ -106,6 +106,7 @@ class LinearProbe:
             # Use force_device=True for specific CUDA devices (e.g., cuda:1) to avoid
             # device_map="auto" placing it on the wrong GPU
             force = target_device.type == "cuda" and target_device.index is not None
+            print(f"[LinearProbe] Loading model to {target_device} (force_device={force})")
             self.model, _, self.dtype = load_model(
                 self.cfg.model_id, target_device, self.dtype, force_device=force
             )
@@ -116,6 +117,9 @@ class LinearProbe:
             if not hasattr(self.model, 'hf_device_map') and self.device.type != "cpu":
                 self.model.to(self.device)
             self.model.eval()
+            # Verify actual device
+            actual_device = next(self.model.parameters()).device
+            print(f"[LinearProbe] Model loaded, actual device: {actual_device}")
             self.featurizer = ActivationFeaturizer(self.model, self.tok, layer=self.cfg.layer, token_pool=self.cfg.token_pool)
 
     def fit(self, texts: Sequence[str], labels: Sequence[int], max_len: Optional[int] = None) -> Dict[str, Any]:
