@@ -2,13 +2,17 @@
 """
 Step 4: PPO with Probe-Based Safety Reward (Evasion of Activation Probe)
 
-Data: data/ppo_prompts_{ll,qw}.jsonl (benign + shade prompts)
+Data: data/ppo_prompts_qw14.jsonl (benign + shade prompts)
 Reward: Safety signal from trained probe (reward = 1 - prob_malicious)
 Purpose: Make model's internal activations look "benign" to the probe.
 
+The data was generated using the Qwen-14B monitor. The agent model (default: Qwen-3B)
+is trained via PPO to evade the activation probe.
+
 Usage:
-    python scripts/training/4_ppo_probe.py --model qwen
-    python scripts/training/4_ppo_probe.py --model llama --from_sft --ppo_steps 200
+    python scripts/training/4_ppo_probe.py
+    python scripts/training/4_ppo_probe.py --model qwen-7b
+    python scripts/training/4_ppo_probe.py --from_sft --ppo_steps 200
 """
 import sys
 from pathlib import Path
@@ -16,40 +20,36 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
 
+# Data generated with 14B monitor
+DATA_TAG = "qw14"
 
-def get_model_config(model_arg: str):
-    """Get model path and tag, detecting available models with size preference."""
-    models_dir = ROOT / "models"
+# Agent model options (Qwen only)
+AGENT_MODELS = {
+    "qwen-3b": ("qwen2.5-3b-instruct", "qw3"),
+    "qwen-7b": ("qwen2.5-7b-instruct", "qw7"),
+    "qwen-14b": ("qwen2.5-14b-instruct", "qw14"),
+    "qwen-32b": ("qwen2.5-32b-instruct", "qw32"),
+    "qwen-72b": ("qwen2.5-72b-instruct", "qw72"),
+}
+
+
+def get_agent_model_path(model_arg: str):
+    """Get agent model path from argument."""
+    if model_arg not in AGENT_MODELS:
+        raise ValueError(f"Unknown model: {model_arg}. Choose from: {list(AGENT_MODELS.keys())}")
     
-    if model_arg == "qwen":
-        candidates = [
-            ("qwen2.5-72b-instruct", "qw72"),
-            ("qwen2.5-32b-instruct", "qw32"),
-            ("qwen2.5-14b-instruct", "qw14"),
-            ("qwen2.5-7b-instruct", "qw7"),
-            ("qwen2.5-3b-instruct", "qw3"),
-        ]
-    else:  # llama
-        candidates = [
-            ("llama-3.1-70b-instruct", "ll70"),
-            ("llama-3.1-8b-instruct", "ll8"),
-            ("llama-3.2-3b-instruct", "ll3"),
-        ]
-    
-    for model_name, tag in candidates:
-        path = models_dir / model_name
-        if path.exists():
-            return str(path), tag
-    
-    return str(models_dir / candidates[-1][0]), candidates[-1][1]
+    model_name, tag = AGENT_MODELS[model_arg]
+    model_path = ROOT / "models" / model_name
+    return str(model_path), tag
 
 
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="PPO training with probe safety reward")
-    parser.add_argument("--model", choices=["qwen", "llama"], default="qwen", help="Model to use")
+    parser.add_argument("--model", choices=list(AGENT_MODELS.keys()), default="qwen-3b",
+                        help="Agent model to use (default: qwen-3b)")
     parser.add_argument("--from_sft", action="store_true", help="Start from SFT checkpoint")
-    parser.add_argument("--probe_dir", type=str, default=None, help="Probe directory (default: checkpoints/probe_{tag})")
+    parser.add_argument("--probe_dir", type=str, default=None, help="Probe directory (default: checkpoints/probe_qw)")
     parser.add_argument("--ppo_steps", type=int, default=100, help="PPO training steps")
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size")
     parser.add_argument("--max_new_tokens", type=int, default=128, help="Max tokens to generate")
@@ -59,18 +59,18 @@ def main():
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory")
     args = parser.parse_args()
 
-    model_path, tag = get_model_config(args.model)
-    data_path = ROOT / f"data/ppo_prompts_{tag}.jsonl"
-    probe_dir = args.probe_dir or f"checkpoints/probe_{tag}"
-    output_dir = args.output_dir or f"checkpoints/{args.model}_ppo_probe"
+    model_path, model_tag = get_agent_model_path(args.model)
+    data_path = ROOT / f"data/ppo_prompts_{DATA_TAG}.jsonl"
+    probe_dir = args.probe_dir or "checkpoints/probe_qw"
+    output_dir = args.output_dir or "checkpoints/qwen_ppo_probe"
     
     # Optional: start from SFT checkpoint
-    adapter_path = f"checkpoints/{args.model}_sft_peft" if args.from_sft else None
+    adapter_path = "checkpoints/qwen_sft_peft" if args.from_sft else None
 
     print("=" * 60)
     print("Step 4: PPO with Probe Safety Reward")
     print("=" * 60)
-    print(f"Model: {model_path}")
+    print(f"Agent Model: {model_path}")
     if adapter_path:
         print(f"Starting from: {adapter_path}")
     print(f"Probe: {probe_dir}")
@@ -116,4 +116,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

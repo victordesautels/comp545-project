@@ -2,19 +2,22 @@
 #
 # Run complete training pipeline for SHADE-Evasion project
 #
+# The agent model being trained is Qwen-3B by default. The 14B model is used
+# separately as a monitor and generated the training data (data/*_qw14.jsonl).
+#
 # Usage:
-#   ./scripts/training/run_all.sh qwen      # Train with Qwen model
-#   ./scripts/training/run_all.sh llama     # Train with Llama model
-#   ./scripts/training/run_all.sh qwen 50   # Custom PPO steps
+#   ./scripts/train_monitors.sh              # Train Qwen-3B agent (default)
+#   ./scripts/train_monitors.sh qwen-3b      # Explicitly specify agent model
+#   ./scripts/train_monitors.sh qwen-7b 50   # Different agent model, custom PPO steps
 
 set -e
 
-MODEL=${1:-qwen}
+MODEL=${1:-qwen-3b}
 PPO_STEPS=${2:-100}
 
 echo "========================================"
 echo "SHADE-Evasion Training Pipeline"
-echo "Model: $MODEL"
+echo "Agent Model: $MODEL"
 echo "PPO Steps: $PPO_STEPS"
 echo "========================================"
 echo
@@ -53,11 +56,10 @@ echo "========================================"
 echo "Training pipeline complete!"
 echo ""
 echo "Checkpoints saved to:"
-echo "  - checkpoints/probe_${MODEL:0:2}"
-echo "  - checkpoints/${MODEL}_sft_peft"
-echo "  - checkpoints/${MODEL}_ppo_cot"
-echo "  - checkpoints/${MODEL}_ppo_probe"
-echo "  - checkpoints/${MODEL}_ppo_hybrid"
-echo "  - checkpoints/${MODEL}_ppo_dual_cot"
+echo "  - checkpoints/probe_qw"
+echo "  - checkpoints/qwen_sft_peft"
+echo "  - checkpoints/qwen_ppo_cot"
+echo "  - checkpoints/qwen_ppo_probe"
+echo "  - checkpoints/qwen_ppo_hybrid"
+echo "  - checkpoints/qwen_ppo_dual_cot"
 echo "========================================"
-

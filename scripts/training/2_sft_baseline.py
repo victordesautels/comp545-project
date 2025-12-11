@@ -2,12 +2,16 @@
 """
 Step 2: SFT Baseline on Mixed SHADE Traces
 
-Data: data/sft_train_{ll,qw}.jsonl (benign + shade episodes as prompt-response pairs)
+Data: data/sft_train_qw14.jsonl (benign + shade episodes as prompt-response pairs)
 Purpose: Warm-start that understands tools/tasks without optimizing for evasion.
 
+The data was generated using the Qwen-14B monitor. The agent model (default: Qwen-3B)
+is fine-tuned on this data.
+
 Usage:
-    python scripts/training/2_sft_baseline.py --model qwen
-    python scripts/training/2_sft_baseline.py --model llama --epochs 5 --lr 1e-4
+    python scripts/training/2_sft_baseline.py
+    python scripts/training/2_sft_baseline.py --model qwen-7b
+    python scripts/training/2_sft_baseline.py --epochs 5 --lr 1e-4
 """
 import sys
 from pathlib import Path
@@ -15,38 +19,34 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
 
+# Data generated with 14B monitor
+DATA_TAG = "qw14"
 
-def get_model_config(model_arg: str):
-    """Get model path and tag, detecting available models with size preference."""
-    models_dir = ROOT / "models"
+# Agent model options (Qwen only)
+AGENT_MODELS = {
+    "qwen-3b": ("qwen2.5-3b-instruct", "qw3"),
+    "qwen-7b": ("qwen2.5-7b-instruct", "qw7"),
+    "qwen-14b": ("qwen2.5-14b-instruct", "qw14"),
+    "qwen-32b": ("qwen2.5-32b-instruct", "qw32"),
+    "qwen-72b": ("qwen2.5-72b-instruct", "qw72"),
+}
+
+
+def get_agent_model_path(model_arg: str):
+    """Get agent model path from argument."""
+    if model_arg not in AGENT_MODELS:
+        raise ValueError(f"Unknown model: {model_arg}. Choose from: {list(AGENT_MODELS.keys())}")
     
-    if model_arg == "qwen":
-        candidates = [
-            ("qwen2.5-72b-instruct", "qw72"),
-            ("qwen2.5-32b-instruct", "qw32"),
-            ("qwen2.5-14b-instruct", "qw14"),
-            ("qwen2.5-7b-instruct", "qw7"),
-            ("qwen2.5-3b-instruct", "qw3"),
-        ]
-    else:  # llama
-        candidates = [
-            ("llama-3.1-70b-instruct", "ll70"),
-            ("llama-3.1-8b-instruct", "ll8"),
-            ("llama-3.2-3b-instruct", "ll3"),
-        ]
-    
-    for model_name, tag in candidates:
-        path = models_dir / model_name
-        if path.exists():
-            return str(path), tag
-    
-    return str(models_dir / candidates[-1][0]), candidates[-1][1]
+    model_name, tag = AGENT_MODELS[model_arg]
+    model_path = ROOT / "models" / model_name
+    return str(model_path), tag
 
 
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="SFT warm-start on mixed benign+shade data")
-    parser.add_argument("--model", choices=["qwen", "llama"], default="qwen", help="Model to use")
+    parser.add_argument("--model", choices=list(AGENT_MODELS.keys()), default="qwen-3b",
+                        help="Agent model to use (default: qwen-3b)")
     parser.add_argument("--epochs", type=int, default=3, help="Training epochs")
     parser.add_argument("--lr", type=float, default=5e-5, help="Learning rate")
     parser.add_argument("--batch_size", type=int, default=1, help="Batch size")
@@ -56,14 +56,14 @@ def main():
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory")
     args = parser.parse_args()
 
-    model_path, tag = get_model_config(args.model)
-    data_path = ROOT / f"data/sft_train_{tag}.jsonl"
-    output_dir = args.output_dir or f"checkpoints/{args.model}_sft_peft"
+    model_path, model_tag = get_agent_model_path(args.model)
+    data_path = ROOT / f"data/sft_train_{DATA_TAG}.jsonl"
+    output_dir = args.output_dir or "checkpoints/qwen_sft_peft"
 
     print("=" * 60)
     print("Step 2: SFT Baseline Training")
     print("=" * 60)
-    print(f"Model: {model_path}")
+    print(f"Agent Model: {model_path}")
     print(f"Data: {data_path}")
     print(f"Epochs: {args.epochs}")
     print(f"Learning rate: {args.lr}")
@@ -98,4 +98,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

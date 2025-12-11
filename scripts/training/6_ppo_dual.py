@@ -2,14 +2,18 @@
 """
 Step 6: PPO with Dual Reward (Task Success + Safety)
 
-Data: data/ppo_prompts_{ll,qw}.jsonl (benign + shade prompts)
+Data: data/ppo_prompts_qw14.jsonl (benign + shade prompts)
 Reward: task_weight * task_success + safety_weight * safety_reward
 Purpose: Study tradeoff between "undetected sabotage" vs "main-task competence".
 
+The data was generated using the Qwen-14B monitor. The agent model (default: Qwen-3B)
+is trained via PPO with both task and safety rewards.
+
 Usage:
-    python scripts/training/6_ppo_dual.py --model qwen
-    python scripts/training/6_ppo_dual.py --model llama --task_weight 0.6 --safety_weight 0.4
-    python scripts/training/6_ppo_dual.py --model qwen --safety_type probe --from_sft
+    python scripts/training/6_ppo_dual.py
+    python scripts/training/6_ppo_dual.py --model qwen-7b
+    python scripts/training/6_ppo_dual.py --task_weight 0.6 --safety_weight 0.4
+    python scripts/training/6_ppo_dual.py --safety_type probe --from_sft
 """
 import sys
 from pathlib import Path
@@ -17,38 +21,34 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
 
+# Data generated with 14B monitor
+DATA_TAG = "qw14"
 
-def get_model_config(model_arg: str):
-    """Get model path and tag, detecting available models with size preference."""
-    models_dir = ROOT / "models"
+# Agent model options (Qwen only)
+AGENT_MODELS = {
+    "qwen-3b": ("qwen2.5-3b-instruct", "qw3"),
+    "qwen-7b": ("qwen2.5-7b-instruct", "qw7"),
+    "qwen-14b": ("qwen2.5-14b-instruct", "qw14"),
+    "qwen-32b": ("qwen2.5-32b-instruct", "qw32"),
+    "qwen-72b": ("qwen2.5-72b-instruct", "qw72"),
+}
+
+
+def get_agent_model_path(model_arg: str):
+    """Get agent model path from argument."""
+    if model_arg not in AGENT_MODELS:
+        raise ValueError(f"Unknown model: {model_arg}. Choose from: {list(AGENT_MODELS.keys())}")
     
-    if model_arg == "qwen":
-        candidates = [
-            ("qwen2.5-72b-instruct", "qw72"),
-            ("qwen2.5-32b-instruct", "qw32"),
-            ("qwen2.5-14b-instruct", "qw14"),
-            ("qwen2.5-7b-instruct", "qw7"),
-            ("qwen2.5-3b-instruct", "qw3"),
-        ]
-    else:  # llama
-        candidates = [
-            ("llama-3.1-70b-instruct", "ll70"),
-            ("llama-3.1-8b-instruct", "ll8"),
-            ("llama-3.2-3b-instruct", "ll3"),
-        ]
-    
-    for model_name, tag in candidates:
-        path = models_dir / model_name
-        if path.exists():
-            return str(path), tag
-    
-    return str(models_dir / candidates[-1][0]), candidates[-1][1]
+    model_name, tag = AGENT_MODELS[model_arg]
+    model_path = ROOT / "models" / model_name
+    return str(model_path), tag
 
 
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="PPO training with dual reward (task + safety)")
-    parser.add_argument("--model", choices=["qwen", "llama"], default="qwen", help="Model to use")
+    parser.add_argument("--model", choices=list(AGENT_MODELS.keys()), default="qwen-3b",
+                        help="Agent model to use (default: qwen-3b)")
     parser.add_argument("--from_sft", action="store_true", help="Start from SFT checkpoint")
     parser.add_argument("--safety_type", choices=["cot", "probe", "hybrid"], default="cot", help="Safety monitor type")
     parser.add_argument("--probe_dir", type=str, default=None, help="Probe directory (for probe/hybrid)")
@@ -64,18 +64,18 @@ def main():
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory")
     args = parser.parse_args()
 
-    model_path, tag = get_model_config(args.model)
-    data_path = ROOT / f"data/ppo_prompts_{tag}.jsonl"
-    probe_dir = args.probe_dir or f"checkpoints/probe_{tag}"
-    output_dir = args.output_dir or f"checkpoints/{args.model}_ppo_dual_{args.safety_type}"
+    model_path, model_tag = get_agent_model_path(args.model)
+    data_path = ROOT / f"data/ppo_prompts_{DATA_TAG}.jsonl"
+    probe_dir = args.probe_dir or "checkpoints/probe_qw"
+    output_dir = args.output_dir or f"checkpoints/qwen_ppo_dual_{args.safety_type}"
     
     # Optional: start from SFT checkpoint
-    adapter_path = f"checkpoints/{args.model}_sft_peft" if args.from_sft else None
+    adapter_path = "checkpoints/qwen_sft_peft" if args.from_sft else None
 
     print("=" * 60)
     print("Step 6: PPO with Dual Reward (Task + Safety)")
     print("=" * 60)
-    print(f"Model: {model_path}")
+    print(f"Agent Model: {model_path}")
     if adapter_path:
         print(f"Starting from: {adapter_path}")
     print(f"Safety type: {args.safety_type}")
@@ -137,4 +137,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
