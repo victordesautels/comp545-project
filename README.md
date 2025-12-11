@@ -48,8 +48,6 @@ python tests/test_ppo_training.py
 
 ### Repository and Environment
 
-**Status:** Complete
-
 **Structure:**
 ```
 project_code/
