@@ -131,7 +131,7 @@ def test_ppo_trainer_init(skip=False):
         # Load model with value head
         policy = AutoModelForCausalLMWithValueHead.from_pretrained(
             model_path,
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
             trust_remote_code=True,
         )
         

@@ -106,9 +106,12 @@ class LinearProbe:
             # Use force_device=True for specific CUDA devices (e.g., cuda:1) to avoid
             # device_map="auto" placing it on the wrong GPU
             force = target_device.type == "cuda" and target_device.index is not None
+            # Disable 8-bit loading - bitsandbytes may not work on all clusters
+            use_8bit = False
             print(f"[LinearProbe] Loading model to {target_device} (force_device={force})")
             self.model, _, self.dtype = load_model(
-                self.cfg.model_id, target_device, self.dtype, force_device=force
+                self.cfg.model_id, target_device, self.dtype, 
+                force_device=force, load_in_8bit=use_8bit
             )
             # Keep our target device, don't use whatever load_model returned
             self.device = target_device

@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --account=def-sreddy
-#SBATCH --mem=48G
+#SBATCH --mem=32G
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:2
 #SBATCH --time=12:00:00
@@ -29,10 +29,14 @@
 #
 # See also: scripts/train_launcher.sh for submitting steps as separate jobs
 
+# CUDA memory optimization: use expandable segments to reduce fragmentation
+export PYTORCH_ALLOC_CONF=expandable_segments:True
+
 set -e
 
 MODEL="qwen-3b"
-PPO_STEPS=2000
+PPO_STEPS=1000
+MONITOR_SIZE=7
 STEPS=""
 
 # Parse arguments
@@ -46,6 +50,10 @@ while [[ $# -gt 0 ]]; do
             MODEL="$2"
             shift 2
             ;;
+        -M|--monitor)
+            MONITOR_SIZE="$2"
+            shift 2
+            ;;
         -p|--ppo)
             PPO_STEPS="$2"
             shift 2
@@ -54,13 +62,21 @@ while [[ $# -gt 0 ]]; do
             # Legacy positional args: MODEL PPO_STEPS
             if [[ -z "$MODEL" || "$MODEL" == "qwen-3b" ]]; then
                 MODEL="$1"
-            elif [[ "$PPO_STEPS" == "2000" ]]; then
+            elif [[ "$PPO_STEPS" == "1000" ]]; then
                 PPO_STEPS="$1"
             fi
             shift
             ;;
     esac
 done
+
+# Map monitor size to model name
+case $MONITOR_SIZE in
+    3)  COT_MODEL="qwen2.5-3b-instruct" ;;
+    7)  COT_MODEL="qwen2.5-7b-instruct" ;;
+    14) COT_MODEL="qwen2.5-14b-instruct" ;;
+    *)  echo "Invalid monitor size: $MONITOR_SIZE (use 3, 7, or 14)"; exit 1 ;;
+esac
 
 # Parse step specification into array
 parse_steps() {
@@ -101,6 +117,7 @@ echo "========================================"
 echo "Hostname: $(hostname)"
 echo "Date: $(date)"
 echo "Agent Model: $MODEL"
+echo "CoT Monitor: $COT_MODEL (${MONITOR_SIZE}B)"
 echo "PPO Steps: $PPO_STEPS"
 echo "Steps: ${STEP_LIST[*]}"
 echo "========================================"
@@ -146,7 +163,7 @@ fi
 # Step 3: PPO with CoT reward
 if should_run 3; then
     echo "[3/6] PPO with CoT safety reward..."
-    python -u scripts/training/3_ppo_cot.py --model $MODEL --ppo_steps $PPO_STEPS --from_sft
+    python -u scripts/training/3_ppo_cot.py --model $MODEL --ppo_steps $PPO_STEPS --cot_model $COT_MODEL --from_sft
     echo
 fi
 
@@ -160,14 +177,14 @@ fi
 # Step 5: PPO with hybrid reward
 if should_run 5; then
     echo "[5/6] PPO with hybrid safety reward..."
-    python -u scripts/training/5_ppo_hybrid.py --model $MODEL --ppo_steps $PPO_STEPS --from_sft
+    python -u scripts/training/5_ppo_hybrid.py --model $MODEL --ppo_steps $PPO_STEPS --cot_model $COT_MODEL --from_sft
     echo
 fi
 
 # Step 6: PPO with dual reward
 if should_run 6; then
     echo "[6/6] PPO with dual reward (task + safety)..."
-    python -u scripts/training/6_ppo_dual.py --model $MODEL --ppo_steps $PPO_STEPS --from_sft
+    python -u scripts/training/6_ppo_dual.py --model $MODEL --ppo_steps $PPO_STEPS --cot_model $COT_MODEL --from_sft
     echo
 fi
 
@@ -177,8 +194,8 @@ echo ""
 echo "Checkpoints saved to:"
 echo "  - checkpoints/probe_qw"
 echo "  - checkpoints/qwen_sft_peft"
-echo "  - checkpoints/qwen_ppo_cot"
+echo "  - checkpoints/qwen_ppo_cot_${MONITOR_SIZE}b"
 echo "  - checkpoints/qwen_ppo_probe"
-echo "  - checkpoints/qwen_ppo_hybrid"
-echo "  - checkpoints/qwen_ppo_dual_cot"
+echo "  - checkpoints/qwen_ppo_hybrid_${MONITOR_SIZE}b"
+echo "  - checkpoints/qwen_ppo_dual_cot_${MONITOR_SIZE}b"
 echo "========================================"

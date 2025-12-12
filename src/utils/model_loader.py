@@ -98,6 +98,7 @@ def load_model(
 	dtype: Optional[torch.dtype] = None,
 	quantize_if_possible: bool = True,
 	force_device: bool = False,
+	load_in_8bit: bool = False,
 ) -> Tuple[torch.nn.Module, torch.device, torch.dtype]:
 	"""Load model from local path or HuggingFace Hub.
 	
@@ -109,6 +110,8 @@ def load_model(
 		force_device: If True and device is a specific CUDA device (e.g., cuda:1),
 		              load model directly onto that device instead of using device_map="auto".
 		              Useful when you want to control which GPU gets the model.
+		load_in_8bit: If True, load model in 8-bit precision for memory efficiency.
+		              Useful for inference-only models (monitors).
 	"""
 	# Resolve model path (convert relative paths to absolute)
 	model_id, is_local = resolve_model_path(model_id)
@@ -119,12 +122,16 @@ def load_model(
 	if dtype is None:
 		dtype = default_dtype_for_device(device)
 
-	# Try 4-bit only when on CUDA and bitsandbytes is present (not when forcing specific device)
+	# Try 4-bit or 8-bit quantization when on CUDA and bitsandbytes is present
 	load_in_4bit = False
-	if quantize_if_possible and device.type == "cuda" and not force_device:
+	use_8bit = False
+	if device.type == "cuda":
 		with contextlib.suppress(Exception):
 			import bitsandbytes as bnb  # noqa: F401
-			load_in_4bit = True
+			if load_in_8bit:
+				use_8bit = True
+			elif quantize_if_possible and not force_device:
+				load_in_4bit = True
 
 	# Common kwargs for from_pretrained
 	# Don't set local_files_only - it triggers repo ID validation in newer transformers.
@@ -135,23 +142,32 @@ def load_model(
 		if force_device:
 			# Load onto specific CUDA device without device_map="auto"
 			# Use device_map={"": device} to put entire model on specified GPU
-			# This is more efficient than loading to CPU then moving, especially for large models
 			device_str = str(device)  # e.g., "cuda:1"
-			model = AutoModelForCausalLM.from_pretrained(
-				model_id,
-				dtype=dtype,
-				device_map={"": device_str},
+			load_kwargs = {
+				"dtype": dtype,
+				"device_map": {"": device_str},
 				**common_kwargs
-			)
+			}
+			# Allow 8-bit quantization with force_device for memory savings
+			if use_8bit:
+				load_kwargs["load_in_8bit"] = True
+				load_kwargs.pop("dtype", None)  # 8-bit sets its own dtype
+				print(f"[load_model] Loading in 8-bit on {device_str}")
+			model = AutoModelForCausalLM.from_pretrained(model_id, **load_kwargs)
 		else:
 			# Use device_map="auto" for automatic distribution
-			model = AutoModelForCausalLM.from_pretrained(
-				model_id,
-				dtype=dtype,
-				device_map="auto",
-				load_in_4bit=load_in_4bit,
+			load_kwargs = {
+				"dtype": dtype,
+				"device_map": "auto",
 				**common_kwargs
-			)
+			}
+			if use_8bit:
+				load_kwargs["load_in_8bit"] = True
+				load_kwargs.pop("dtype", None)
+				print("[load_model] Loading in 8-bit with device_map=auto")
+			elif load_in_4bit:
+				load_kwargs["load_in_4bit"] = True
+			model = AutoModelForCausalLM.from_pretrained(model_id, **load_kwargs)
 	elif device.type == "mps":
 		# Put the whole model on MPS; no 4-bit on macOS
 		model = AutoModelForCausalLM.from_pretrained(

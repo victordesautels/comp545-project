@@ -106,6 +106,14 @@ from transformers import (
 from peft import LoraConfig, get_peft_model, PeftModel, prepare_model_for_kbit_training
 from trl import SFTTrainer, PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead, create_reference_model
 
+# Accelerate for distributed training
+try:
+	from accelerate import Accelerator
+	from accelerate.utils import DeepSpeedPlugin
+	ACCELERATE_AVAILABLE = True
+except ImportError:
+	ACCELERATE_AVAILABLE = False
+
 from src.utils.device import pick_device, default_dtype_for_device
 from src.utils.model_loader import load_tokenizer, load_model, DEFAULT_MODEL
 
@@ -158,12 +166,13 @@ def build_ppo_prompts(records: List[Dict]) -> List[str]:
 
 
 def wrap_lora(model, r: int = 16, alpha: int = 32, dropout: float = 0.05,
-              target_modules: Optional[List[str]] = None):
+              target_modules: Optional[List[str]] = None, adapter_name: str = "default"):
 	"""
 	Apply LoRA to a model. Wrapper-aware for TRL PPO models.
 	
 	Args:
 		model: Either a plain HF model or TRL AutoModelForCausalLMWithValueHead
+		adapter_name: Name for the new adapter (useful when stacking adapters)
 	
 	Returns:
 		Model with LoRA applied (preserves wrapper type if present)
@@ -185,11 +194,25 @@ def wrap_lora(model, r: int = 16, alpha: int = 32, dropout: float = 0.05,
 	if hasattr(model, "pretrained_model"):
 		# Apply LoRA to the inner model, keep wrapper type
 		base = model.pretrained_model
-		base = get_peft_model(base, lora_cfg)
+		# Check if model already has PEFT adapters (e.g., loaded SFT adapter in DeepSpeed mode)
+		if hasattr(base, 'peft_config') and base.peft_config:
+			# Add a new adapter on top with a different name
+			print(f"[LoRA] Model already has adapters, adding new adapter '{adapter_name}'")
+			base.add_adapter(adapter_name, lora_cfg)
+			base.set_adapter(adapter_name)
+		else:
+			base = get_peft_model(base, lora_cfg)
 		model.pretrained_model = base
 		return model
 	
 	# Plain HF model case (e.g. for SFT)
+	# Check if already a PEFT model
+	if hasattr(model, 'peft_config') and model.peft_config:
+		print(f"[LoRA] Model already has adapters, adding new adapter '{adapter_name}'")
+		model.add_adapter(adapter_name, lora_cfg)
+		model.set_adapter(adapter_name)
+		return model
+	
 	return get_peft_model(model, lora_cfg)
 
 
@@ -495,6 +518,7 @@ def run_ppo(
 	ppo_steps: int = 200,
 	ppo_batch_size: int = 4,
 	gen_max_new_tokens: int = 128,
+	max_prompt_tokens: int = 256,  # Hard cap on prompt length to reduce memory
 	temperature: float = 0.9,
 	learning_rate: float = 1e-5,
 	save_every: int = 50,
@@ -524,6 +548,8 @@ def run_ppo(
 	save_reward_log: bool = True,  # Save per-step rewards to JSONL
 	# Pre-trained adapter (from SFT warm-start)
 	adapter_path: Optional[str] = None,
+	# DeepSpeed ZeRO-3 for multi-GPU scaling
+	use_deepspeed: bool = False,
 ):
 	"""
 	Run TRUE PPO training with SHADE monitor-based rewards using TRL PPOTrainer.
@@ -549,24 +575,38 @@ def run_ppo(
 		log_reward_details: Enable detailed logging of safety/task reward components
 		save_reward_log: Save per-step reward breakdown to JSONL file
 	"""
-	# Force CPU for PPO training if MPS would be selected
-	# (MPS + TRL + LoRA + value head causes crashes)
-	detected_device = pick_device()
-	if detected_device.type == "mps":
-		print("[PPO] Detected MPS; forcing CPU for PPO training to avoid MPS matmul bugs.")
-		device = torch.device("cpu")
+	# Initialize Accelerator for DeepSpeed if requested
+	accelerator = None
+	if use_deepspeed:
+		if not ACCELERATE_AVAILABLE:
+			raise ImportError("accelerate not installed. Run: pip install accelerate")
+		accelerator = Accelerator()
+		device = accelerator.device
+		dtype = torch.bfloat16 if accelerator.mixed_precision == "bf16" else torch.float16
+		print(f"[PPO] DeepSpeed enabled: process {accelerator.process_index}/{accelerator.num_processes}")
+		print(f"[PPO] Device: {device}, dtype: {dtype}")
+		# For DeepSpeed, monitor runs on the same process (no separate GPU)
+		monitor_device = device
 	else:
-		device = detected_device
+		# Force CPU for PPO training if MPS would be selected
+		# (MPS + TRL + LoRA + value head causes crashes)
+		detected_device = pick_device()
+		if detected_device.type == "mps":
+			print("[PPO] Detected MPS; forcing CPU for PPO training to avoid MPS matmul bugs.")
+			device = torch.device("cpu")
+		else:
+			device = detected_device
+		
+		dtype = default_dtype_for_device(device)
+		
+		# Check for second GPU for monitor (reduces memory pressure on policy GPU)
+		monitor_device = device
+		if device.type == "cuda" and torch.cuda.device_count() > 1:
+			monitor_device = torch.device("cuda:1")
+			print(f"[PPO] Using device: {device} (policy), {monitor_device} (monitor)")
+		else:
+			print(f"[PPO] Using device: {device}")
 	
-	dtype = default_dtype_for_device(device)
-	
-	# Check for second GPU for monitor (reduces memory pressure on policy GPU)
-	monitor_device = device
-	if device.type == "cuda" and torch.cuda.device_count() > 1:
-		monitor_device = torch.device("cuda:1")
-		print(f"[PPO] Using device: {device} (policy), {monitor_device} (monitor)")
-	else:
-		print(f"[PPO] Using device: {device}")
 	print(f"[PPO] Reward type: {reward_type}")
 
 	tok = load_tokenizer(model_id)
@@ -579,39 +619,68 @@ def run_ppo(
 	tok.padding_side = 'left'
 	
 	# Load policy model with value head wrapper (required for PPO)
+	# For DeepSpeed, don't use device_map - let DeepSpeed handle distribution
+	device_str = None if use_deepspeed else (str(device) if device.type == "cuda" else None)
+	
 	if adapter_path:
-		# Load base model with pre-trained SFT adapter, then merge
+		# Load base model with pre-trained SFT adapter
 		print(f"[PPO] Loading pre-trained adapter from {adapter_path}...")
 		from transformers import AutoModelForCausalLM
-		base_model = AutoModelForCausalLM.from_pretrained(
-			model_id, dtype=dtype, trust_remote_code=True,
-			attn_implementation="sdpa",  # Memory-efficient attention
-		)
+		load_kwargs = {
+			"dtype": dtype,
+			"trust_remote_code": True,
+			"attn_implementation": "sdpa",  # Memory-efficient attention
+		}
+		if device_str and not use_deepspeed:
+			load_kwargs["device_map"] = {"": device_str}  # Force all layers to policy GPU
+		base_model = AutoModelForCausalLM.from_pretrained(model_id, **load_kwargs)
 		peft_model = PeftModel.from_pretrained(base_model, adapter_path)
-		# Merge adapter weights into base (so we can add fresh LoRA on top for PPO)
-		merged_model = peft_model.merge_and_unload()
-		# Enable gradient checkpointing for memory savings
-		if hasattr(merged_model, 'gradient_checkpointing_enable'):
-			merged_model.gradient_checkpointing_enable()
-			print("[PPO] Gradient checkpointing enabled")
-		# Wrap with value head
-		policy = AutoModelForCausalLMWithValueHead(pretrained_model=merged_model)
-		print("[PPO] Initialized from merged SFT adapter")
+		
+		if use_deepspeed:
+			# DeepSpeed ZeRO-3 shards weights, so merge_and_unload() fails
+			# Instead, we skip merging and will add new LoRA on top
+			print("[PPO] DeepSpeed mode: skipping adapter merge (will stack adapters)")
+			# Enable gradient checkpointing
+			if hasattr(peft_model, 'gradient_checkpointing_enable'):
+				peft_model.gradient_checkpointing_enable()
+				print("[PPO] Gradient checkpointing enabled")
+			# Wrap with value head - use the PEFT model directly
+			policy = AutoModelForCausalLMWithValueHead(pretrained_model=peft_model)
+			print("[PPO] Initialized with stacked SFT adapter (DeepSpeed)")
+		else:
+			# Standard mode: merge adapter weights into base
+			# (so we can add fresh LoRA on top for PPO)
+			merged_model = peft_model.merge_and_unload()
+			# Enable gradient checkpointing for memory savings
+			if hasattr(merged_model, 'gradient_checkpointing_enable'):
+				merged_model.gradient_checkpointing_enable()
+				print("[PPO] Gradient checkpointing enabled")
+			# Wrap with value head
+			policy = AutoModelForCausalLMWithValueHead(pretrained_model=merged_model)
+			print("[PPO] Initialized from merged SFT adapter")
 	else:
 		print("[PPO] Loading policy model with value head...")
-		policy = AutoModelForCausalLMWithValueHead.from_pretrained(
-			model_id,
-			dtype=dtype,
-			attn_implementation="sdpa",
-		)
+		load_kwargs = {
+			"dtype": dtype,
+			"attn_implementation": "sdpa",
+		}
+		if device_str and not use_deepspeed:
+			load_kwargs["device_map"] = {"": device_str}  # Force all layers to policy GPU
+		policy = AutoModelForCausalLMWithValueHead.from_pretrained(model_id, **load_kwargs)
 		# Enable gradient checkpointing
 		if hasattr(policy.pretrained_model, 'gradient_checkpointing_enable'):
 			policy.pretrained_model.gradient_checkpointing_enable()
 			print("[PPO] Gradient checkpointing enabled")
-	policy.to(device)
+	
+	# Only move if not already on device (device_map may have placed it) and not using DeepSpeed
+	if not use_deepspeed and not hasattr(policy, 'hf_device_map'):
+		policy.to(device)
+	print(f"[PPO] Policy model loaded")
 	
 	# Apply LoRA to the wrapped model (wrap_lora is now wrapper-aware)
-	policy = wrap_lora(policy, r=lora_r, alpha=lora_alpha, dropout=lora_dropout)
+	# Use distinct adapter name when stacking on existing adapter (DeepSpeed mode)
+	ppo_adapter_name = "ppo" if (use_deepspeed and adapter_path) else "default"
+	policy = wrap_lora(policy, r=lora_r, alpha=lora_alpha, dropout=lora_dropout, adapter_name=ppo_adapter_name)
 	# Set is_peft_model attribute for TRL 0.8.x compatibility with newer PEFT
 	policy.is_peft_model = True
 	# print_trainable_parameters is a PEFT method on the inner model
@@ -623,12 +692,39 @@ def run_ppo(
 
 	# Create frozen reference model for KL penalty
 	print("[PPO] Creating reference model...")
-	ref_model = create_reference_model(policy)
-	# Explicitly move all parameters to the forced device
-	ref_model = ref_model.to(device)
+	if use_deepspeed:
+		# DeepSpeed ZeRO-3 is incompatible with create_reference_model()
+		# Load a fresh copy of the base model instead
+		print("[PPO] DeepSpeed mode: loading reference model separately")
+		from transformers import AutoModelForCausalLM as RefAutoModel
+		ref_load_kwargs = {
+			"dtype": dtype,
+			"trust_remote_code": True,
+			"attn_implementation": "sdpa",
+		}
+		ref_base = RefAutoModel.from_pretrained(model_id, **ref_load_kwargs)
+		# If we have an SFT adapter, load it into the reference model too
+		if adapter_path:
+			ref_base = PeftModel.from_pretrained(ref_base, adapter_path)
+			print(f"[PPO] Reference model loaded with SFT adapter from {adapter_path}")
+		# Wrap with value head to match policy structure
+		ref_model = AutoModelForCausalLMWithValueHead(pretrained_model=ref_base)
+	else:
+		ref_model = create_reference_model(policy)
+		ref_model = ref_model.to(device)
+		for param in ref_model.parameters():
+			param.data = param.data.to(device)
 	for param in ref_model.parameters():
-		param.data = param.data.to(device)
+		param.requires_grad = False  # Ensure no gradient memory allocated
 	ref_model.eval()
+
+	# Clear CUDA cache after model loading to reduce fragmentation
+	if device.type == "cuda" and not use_deepspeed:
+		import gc
+		gc.collect()
+		torch.cuda.empty_cache()
+		torch.cuda.synchronize()
+		print(f"[PPO] Memory after model loading: {torch.cuda.memory_allocated(device) / 1e9:.2f} GB allocated")
 
 	# Load prompts
 	prompts = build_ppo_prompts(read_jsonl(train_jsonl))
@@ -671,33 +767,83 @@ def run_ppo(
 			device=monitor_device,  # Use second GPU if available
 		)
 
-	# Configure PPO - try with accelerator_kwargs first, fall back without if not supported
+	# Log memory usage after monitor initialization
+	if device.type == "cuda":
+		print(f"[PPO] GPU 0 memory: {torch.cuda.memory_allocated(0) / 1e9:.2f} GB")
+		if torch.cuda.device_count() > 1:
+			print(f"[PPO] GPU 1 memory: {torch.cuda.memory_allocated(1) / 1e9:.2f} GB")
+
+	# Configure PPO with memory optimizations
 	ppo_config_kwargs = {
 		"batch_size": ppo_batch_size,
 		"mini_batch_size": ppo_batch_size,
 		"learning_rate": learning_rate,
+		"log_with": None,  # Disable logging to avoid storing full logits (major memory saver)
 	}
 	
-	# Try to add accelerator_kwargs for CPU fallback (not supported in all TRL versions)
-	try:
-		# Test if PPOConfig accepts accelerator_kwargs
-		import inspect
-		if 'accelerator_kwargs' in inspect.signature(PPOConfig).parameters:
-			if device.type == "cpu":
-				ppo_config_kwargs["accelerator_kwargs"] = {"cpu": True}
-	except Exception:
-		pass  # Older TRL version, skip accelerator_kwargs
+	# Add memory optimization options if supported by this TRL version
+	import inspect
+	ppo_sig = inspect.signature(PPOConfig)
+	
+	# optimize_cuda_cache: Clear CUDA cache between steps to reduce fragmentation
+	if 'optimize_cuda_cache' in ppo_sig.parameters:
+		ppo_config_kwargs["optimize_cuda_cache"] = True
+		print("[PPO] Enabled optimize_cuda_cache for memory efficiency")
+	
+	print("[PPO] log_with=None to disable full logits storage")
+	
+	# For DeepSpeed, pass accelerator to PPOConfig if supported
+	if use_deepspeed and accelerator is not None:
+		if 'accelerator_kwargs' in ppo_sig.parameters:
+			# DeepSpeed accelerator config
+			ppo_config_kwargs["accelerator_kwargs"] = {
+				"mixed_precision": accelerator.mixed_precision,
+			}
+	else:
+		# Try to add accelerator_kwargs for CPU fallback (not supported in all TRL versions)
+		try:
+			if 'accelerator_kwargs' in ppo_sig.parameters:
+				if device.type == "cpu":
+					ppo_config_kwargs["accelerator_kwargs"] = {"cpu": True}
+		except Exception:
+			pass  # Older TRL version, skip accelerator_kwargs
 	
 	ppo_config = PPOConfig(**ppo_config_kwargs)
 
+	# Try to use 8-bit Adam optimizer to reduce memory usage (not with DeepSpeed)
+	optimizer = None
+	if not use_deepspeed:
+		try:
+			import bitsandbytes as bnb
+			optimizer = bnb.optim.Adam8bit(policy.parameters(), lr=learning_rate)
+			print("[PPO] Using 8-bit Adam optimizer for memory efficiency")
+		except ImportError:
+			print("[PPO] bitsandbytes not available, using default optimizer")
+		except Exception as e:
+			print(f"[PPO] Could not use 8-bit optimizer: {e}, using default")
+	else:
+		print("[PPO] Using DeepSpeed optimizer (configured in deepspeed_config)")
+
 	# Initialize PPOTrainer (TRL 0.8.6 uses positional args)
 	print("[PPO] Initializing PPOTrainer...")
-	ppo_trainer = PPOTrainer(
-		ppo_config,   # config (positional)
-		policy,       # policy model with value head + LoRA
-		ref_model,    # frozen reference
-		tok,          # tokenizer
-	)
+	trainer_kwargs = {
+		"config": ppo_config,
+		"model": policy,
+		"tokenizer": tok,
+	}
+	# With DeepSpeed ZeRO-3, TRL may need ref_model=None to handle it internally
+	# But we try passing our separately-loaded ref_model first
+	if use_deepspeed:
+		# TRL with DeepSpeed can use ref_model=None and compute KL differently
+		# Or we can pass our separately loaded ref_model
+		trainer_kwargs["ref_model"] = ref_model
+		print("[PPO] DeepSpeed: using separately loaded reference model")
+	else:
+		trainer_kwargs["ref_model"] = ref_model
+	if optimizer is not None:
+		trainer_kwargs["optimizer"] = optimizer
+	
+	ppo_trainer = PPOTrainer(**trainer_kwargs)
 
 	print(f"[PPO] Starting TRUE PPO training for {ppo_steps} steps...")
 	print("-" * 80)
@@ -725,8 +871,14 @@ def run_ppo(
 		if len(batch_prompts) < ppo_batch_size:
 			batch_prompts = (batch_prompts * (ppo_batch_size // len(batch_prompts) + 1))[:ppo_batch_size]
 
-		# 2. Tokenize prompts (using left-padding set at initialization)
-		encoded = tok(batch_prompts, return_tensors="pt", padding=True, truncation=True)
+		# 2. Tokenize prompts with hard cap on length (major memory saver)
+		encoded = tok(
+			batch_prompts, 
+			return_tensors="pt", 
+			padding=True, 
+			truncation=True,
+			max_length=max_prompt_tokens,
+		)
 		input_ids = encoded["input_ids"].to(device)
 		
 		# TRL 0.8.x requires list[1D Tensor]
@@ -944,6 +1096,7 @@ def main():
 	p_ppo.add_argument("--ppo_steps", type=int, default=200, help="Number of PPO training steps")
 	p_ppo.add_argument("--ppo_batch_size", type=int, default=4, help="Batch size for PPO")
 	p_ppo.add_argument("--gen_max_new_tokens", type=int, default=128, help="Max tokens to generate")
+	p_ppo.add_argument("--max_prompt_tokens", type=int, default=256, help="Max prompt tokens (hard cap for memory)")
 	p_ppo.add_argument("--temperature", type=float, default=0.9, help="Sampling temperature")
 	p_ppo.add_argument("--learning_rate", type=float, default=1e-5, help="PPO learning rate")
 	p_ppo.add_argument("--save_every", type=int, default=50, help="Save checkpoint every N steps (0 to disable)")
@@ -1007,6 +1160,10 @@ def main():
 	# Pre-trained adapter (from SFT warm-start)
 	p_ppo.add_argument("--adapter_path", type=str, default=None,
 	                   help="Path to pre-trained SFT adapter to initialize from")
+	
+	# DeepSpeed ZeRO-3 for multi-GPU scaling
+	p_ppo.add_argument("--use_deepspeed", action="store_true",
+	                   help="Enable DeepSpeed ZeRO-3 for multi-GPU training (use with accelerate launch)")
 
 	p_merge = sub.add_parser("merge", help="Merge LoRA adapters into full weights")
 	p_merge.add_argument("--base_model_id", required=True)
@@ -1041,6 +1198,7 @@ def main():
 			ppo_steps=args.ppo_steps,
 			ppo_batch_size=args.ppo_batch_size,
 			gen_max_new_tokens=args.gen_max_new_tokens,
+			max_prompt_tokens=args.max_prompt_tokens,
 			temperature=args.temperature,
 			learning_rate=args.learning_rate,
 			save_every=args.save_every,
@@ -1070,6 +1228,8 @@ def main():
 			save_reward_log=args.save_reward_log,
 			# Pre-trained adapter
 			adapter_path=args.adapter_path,
+			# DeepSpeed
+			use_deepspeed=args.use_deepspeed,
 		)
 	elif args.cmd == "merge":
 		merge_adapters(

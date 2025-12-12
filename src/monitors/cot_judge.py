@@ -115,9 +115,12 @@ class CoTJudge:
             # Use force_device when a specific GPU is requested to prevent
             # device_map="auto" from spreading across multiple GPUs
             force = self.device.type == "cuda" and self.device.index is not None
+            # Disable 8-bit loading - bitsandbytes may not work on all clusters
+            use_8bit = False
             print(f"[CoTJudge] Loading model to {self.device} (force_device={force})")
             self.model, self.device, self.dtype = load_model(
-                self.cfg.model_id, self.device, self.dtype, force_device=force
+                self.cfg.model_id, self.device, self.dtype, 
+                force_device=force, load_in_8bit=use_8bit
             )
             self.tok = load_tokenizer(self.cfg.model_id)
             # Verify actual device

@@ -29,23 +29,20 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 LOG_DIR="$PROJECT_DIR/logs/training"
 
 MODEL="qwen-3b"
-PPO_STEPS=2000
+PPO_STEPS=""
+GEN_TOKENS=""
+CKPT_SUFFIX=""
+MONITOR_SIZE=7
 STEPS=""
 VIEW_MODE=false
 STATUS_MODE=false
+USE_DEEPSPEED=false
 
 # Track submitted job IDs for dependencies
 declare -A JOB_IDS
 
-# Checkpoint directories for each step
-declare -A CKPT_DIRS=(
-    [1]="checkpoints/probe_qw"
-    [2]="checkpoints/qwen_sft_peft"
-    [3]="checkpoints/qwen_ppo_cot"
-    [4]="checkpoints/qwen_ppo_probe"
-    [5]="checkpoints/qwen_ppo_hybrid"
-    [6]="checkpoints/qwen_ppo_dual_cot"
-)
+# Checkpoint directories for each step (will be set after parsing MONITOR_SIZE)
+declare -A CKPT_DIRS
 
 # Files that indicate a step is complete
 declare -A CKPT_MARKERS=(
@@ -59,17 +56,35 @@ declare -A CKPT_MARKERS=(
 
 FORCE_RERUN=false
 
+# Set checkpoint directories based on monitor size and suffix
+set_ckpt_dirs() {
+    local mon_size="${MONITOR_SIZE}b"
+    local suffix="${CKPT_SUFFIX}"
+    CKPT_DIRS=(
+        [1]="checkpoints/probe_qw"
+        [2]="checkpoints/qwen_sft_peft"
+        [3]="checkpoints/qwen_ppo_cot_${mon_size}${suffix}"
+        [4]="checkpoints/qwen_ppo_probe${suffix}"
+        [5]="checkpoints/qwen_ppo_hybrid_${mon_size}${suffix}"
+        [6]="checkpoints/qwen_ppo_dual_cot_${mon_size}${suffix}"
+    )
+}
+
 usage() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  -s, --step STEPS    Steps to run (e.g., 1 or 1,2,3 or 3-6)"
-    echo "  -m, --model MODEL   Model to train (default: qwen-3b)"
-    echo "  -p, --ppo PPO_STEPS PPO training steps (default: 2000)"
-    echo "  -f, --force         Force rerun even if checkpoint exists"
-    echo "  -view               Tail logs of running training jobs"
-    echo "  -status             Show status of training jobs"
-    echo "  -h, --help          Show this help"
+    echo "  -s, --step STEPS      Steps to run (e.g., 1 or 1,2,3 or 3-6)"
+    echo "  -m, --model MODEL     Model to train (default: qwen-3b)"
+    echo "  -M, --monitor SIZE    CoT monitor size: 3, 7, or 14 (default: 7)"
+    echo "  -D, --deepspeed       Use DeepSpeed ZeRO-2 on 4 GPUs (for PPO steps 3-6)"
+    echo "  -p, --ppo PPO_STEPS   PPO training steps (default: auto based on monitor)"
+    echo "  -t, --tokens TOKENS   Max generation tokens (default: auto based on monitor)"
+    echo "  -S, --suffix SUFFIX   Checkpoint folder suffix (e.g., _long)"
+    echo "  -f, --force           Force rerun even if checkpoint exists"
+    echo "  -view                 Tail logs of running training jobs"
+    echo "  -status               Show status of training jobs"
+    echo "  -h, --help            Show this help"
     echo ""
     echo "Steps (with dependencies):"
     echo "  1 = Train activation probe   (no deps)"
@@ -98,6 +113,22 @@ while [[ $# -gt 0 ]]; do
             PPO_STEPS="$2"
             shift 2
             ;;
+        -M|--monitor)
+            MONITOR_SIZE="$2"
+            shift 2
+            ;;
+        -D|--deepspeed)
+            USE_DEEPSPEED=true
+            shift
+            ;;
+        -t|--tokens)
+            GEN_TOKENS="$2"
+            shift 2
+            ;;
+        -S|--suffix)
+            CKPT_SUFFIX="$2"
+            shift 2
+            ;;
         -f|--force)
             FORCE_RERUN=true
             shift
@@ -119,6 +150,9 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Set checkpoint directories based on monitor size
+set_ckpt_dirs
 
 # Step names for display
 declare -A STEP_NAMES=(
@@ -313,20 +347,52 @@ submit_step() {
     local dep_string=$(build_dependency_string "$step")
     local deps=$(get_dependencies "$step")
     
+    # Determine if this is a PPO step that can use DeepSpeed
+    local is_ppo_step=false
+    if [[ $step -ge 3 && $step -le 6 ]]; then
+        is_ppo_step=true
+    fi
+    
     # Use existing train_monitors.sh with step selection
     # This ensures identical environment setup to working runs
     local sbatch_args="--job-name=train_${name}"
     sbatch_args="$sbatch_args -o slurm.train.${name}.%N.%j.out"
     sbatch_args="$sbatch_args -e slurm.train.${name}.%N.%j.err"
     
+    # Set GPU count and script based on DeepSpeed mode
+    local gpu_count=2
+    local script_cmd=""
+    local mode_info=""
+    
+    if $USE_DEEPSPEED && $is_ppo_step; then
+        # DeepSpeed mode: 4 GPUs, use deepspeed script
+        gpu_count=4
+        sbatch_args="$sbatch_args --gres=gpu:$gpu_count"
+        sbatch_args="$sbatch_args --mem=64G"
+        sbatch_args="$sbatch_args --cpus-per-task=16"
+        sbatch_args="$sbatch_args --time=24:00:00"
+        # Pass: MONITOR_SIZE STEPS PPO_STEPS GEN_TOKENS SUFFIX
+        script_cmd="scripts/train_ppo_deepspeed.sh $MONITOR_SIZE $step \"$PPO_STEPS\" \"$GEN_TOKENS\" \"$CKPT_SUFFIX\""
+        mode_info="${MONITOR_SIZE}B monitor, 4 GPUs DeepSpeed"
+        if [[ -n "$CKPT_SUFFIX" ]]; then
+            mode_info="$mode_info, suffix=$CKPT_SUFFIX"
+        fi
+    else
+        # Standard mode: 2 GPUs
+        sbatch_args="$sbatch_args --gres=gpu:$gpu_count"
+        local ppo_arg="${PPO_STEPS:-1000}"
+        script_cmd="scripts/train_monitors.sh -s $step -m $MODEL -M $MONITOR_SIZE -p $ppo_arg"
+        mode_info="${MONITOR_SIZE}B monitor, 2 GPUs"
+    fi
+    
     # Submit and capture job ID
     local submit_output
     if [[ -n "$dep_string" ]]; then
-        echo "Submitting step $step ($name) [waits for: $deps]..."
-        submit_output=$(sbatch $sbatch_args $dep_string scripts/train_monitors.sh -s $step -m $MODEL -p $PPO_STEPS 2>&1)
+        echo "Submitting step $step ($name) [waits for: $deps] ($mode_info)..."
+        submit_output=$(sbatch $sbatch_args $dep_string $script_cmd 2>&1)
     else
-        echo "Submitting step $step ($name)..."
-        submit_output=$(sbatch $sbatch_args scripts/train_monitors.sh -s $step -m $MODEL -p $PPO_STEPS 2>&1)
+        echo "Submitting step $step ($name) ($mode_info)..."
+        submit_output=$(sbatch $sbatch_args $script_cmd 2>&1)
     fi
     
     # Extract job ID from "Submitted batch job XXXXX"
@@ -357,7 +423,15 @@ echo "========================================"
 echo "SHADE-Evasion Training Launcher"
 echo "========================================"
 echo "Model: $MODEL"
-echo "PPO Steps: $PPO_STEPS"
+echo "Monitor: ${MONITOR_SIZE}B"
+echo "PPO Steps: ${PPO_STEPS:-auto}"
+echo "Gen Tokens: ${GEN_TOKENS:-auto}"
+echo "Checkpoint Suffix: ${CKPT_SUFFIX:-none}"
+if $USE_DEEPSPEED; then
+    echo "Mode: DeepSpeed ZeRO-2 (4 GPUs for PPO steps)"
+else
+    echo "Mode: Standard (2 GPUs)"
+fi
 echo "Steps to submit: ${STEP_LIST[*]}"
 echo ""
 echo "Dependency chain:"
