@@ -372,7 +372,7 @@ submit_step() {
         sbatch_args="$sbatch_args --cpus-per-task=16"
         sbatch_args="$sbatch_args --time=24:00:00"
         # Pass: MONITOR_SIZE STEPS PPO_STEPS GEN_TOKENS SUFFIX
-        script_cmd="scripts/train_ppo_deepspeed.sh $MONITOR_SIZE $step \"$PPO_STEPS\" \"$GEN_TOKENS\" \"$CKPT_SUFFIX\""
+        script_cmd="scripts/train_ppo_deepspeed.sh $MONITOR_SIZE $step $PPO_STEPS $GEN_TOKENS $CKPT_SUFFIX"
         mode_info="${MONITOR_SIZE}B monitor, 4 GPUs DeepSpeed"
         if [[ -n "$CKPT_SUFFIX" ]]; then
             mode_info="$mode_info, suffix=$CKPT_SUFFIX"

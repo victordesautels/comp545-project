@@ -38,12 +38,12 @@ export CUDA_HOME=${CUDA_ROOT:-/usr/local/cuda}
 # CUDA memory optimization
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 
-# Parse arguments
+# Parse arguments (strip quotes that may come from sbatch)
 MONITOR_SIZE=${1:-7}
 STEPS_ARG=${2:-"3,4,5,6"}
-PPO_STEPS_ARG=${3:-""}
-GEN_TOKENS_ARG=${4:-""}
-CKPT_SUFFIX=${5:-""}
+PPO_STEPS_ARG=$(echo ${3:-""} | tr -d '"')
+GEN_TOKENS_ARG=$(echo ${4:-""} | tr -d '"')
+CKPT_SUFFIX=$(echo ${5:-""} | tr -d '"')
 
 # Map monitor size to model name
 case $MONITOR_SIZE in

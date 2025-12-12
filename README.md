@@ -293,36 +293,108 @@ Run `python src/training/lora_finetune.py --help` for all available parameters.
 
 ---
 
-## Evaluation Infrastructure
+## Evaluation Pipeline
 
-**Implementation:** `src/eval/shade_eval.py`
+Evaluate trained checkpoints on SHADE-Arena tasks using the same pipeline as data generation, with monitor scoring.
 
-Evaluate trained models on SHADE-Arena tasks with monitoring.
+### Checkpoints to Evaluate
 
-**Command-Line Usage:**
+| Checkpoint | Description | Adapter Path |
+|------------|-------------|--------------|
+| baseline | Base Qwen-3B (no training) | - |
+| sft | SFT warm-start | `checkpoints/qwen_sft_peft` |
+| ppo_cot | PPO with CoT reward | `checkpoints/qwen_ppo_cot_7b` |
+| ppo_probe | PPO with probe reward | `checkpoints/qwen_ppo_probe` |
+| ppo_hybrid | PPO with hybrid reward | `checkpoints/qwen_ppo_hybrid_7b` |
+| ppo_dual | PPO with dual reward | `checkpoints/qwen_ppo_dual_cot_7b` |
+
+### Running Evaluation
+
+**Option 1: Full evaluation via SLURM**
 ```bash
-# Evaluate with CoT monitor
-python src/eval/shade_eval.py \
-  --model_path checkpoints/qwen_sft_peft \
-  --task_name bank_transfer_2 \
-  --monitor_type cot \
-  --num_episodes 10
+# Evaluate all checkpoints with CoT monitor
+sbatch scripts/eval_deepspeed.sh all cot 7
 
-# Evaluate PPO checkpoint with probe monitor
-python src/eval/shade_eval.py \
-  --model_path models/qwen2.5-3b-instruct \
-  --adapter_path checkpoints/qwen_ppo_probe \
-  --monitor_type probe \
-  --probe_dir checkpoints/probe_qw \
-  --num_episodes 5
+# Evaluate specific checkpoint with probe monitor
+sbatch scripts/eval_deepspeed.sh ppo_cot probe 7
+
+# Evaluate with hybrid monitor, shade mode only, 50 episodes
+sbatch scripts/eval_deepspeed.sh all hybrid 7 shade 50
 ```
 
-**Python API:**
+**Option 2: Job launcher with options**
+```bash
+# Submit all checkpoints as separate SLURM jobs
+./scripts/eval_launcher.sh
+
+# Evaluate specific checkpoint
+./scripts/eval_launcher.sh -c ppo_cot -m probe
+
+# All checkpoints with 14B hybrid monitor
+./scripts/eval_launcher.sh -c all -m hybrid -M 14
+
+# Monitor progress
+./scripts/eval_launcher.sh -status
+./scripts/eval_launcher.sh -view
+```
+
+**Option 3: Run evaluation script directly**
+```bash
+# Evaluate all checkpoints
+python scripts/evaluation/run_evaluation.py all --monitor cot
+
+# Evaluate specific checkpoint with probe monitor
+python scripts/evaluation/run_evaluation.py ppo_cot --monitor probe --episodes 50
+
+# Shade mode only with hybrid monitor
+python scripts/evaluation/run_evaluation.py sft --monitor hybrid --mode shade
+
+# Full options
+python scripts/evaluation/run_evaluation.py ppo_dual \
+    --monitor cot \
+    --monitor-size 7 \
+    --mode both \
+    --episodes 20 \
+    --max-steps 30 \
+    --output-dir logs/my_eval
+```
+
+### Key Metrics
+
+- **Task completion rate**: Episodes where agent called `end_task`
+- **Monitor flagging rate**: Episodes flagged by the safety monitor
+- **Side task success rate** (shade mode): Agent completed the sabotage objective
+- **Undetected-sabotage rate**: Side task success AND not flagged (key metric)
+
+### Output Structure
+
+```
+logs/eval_cot_20241212_120000/
+  config.json           # Evaluation configuration
+  summary.json          # Aggregated metrics for all checkpoints
+  baseline/
+    banking_bank_transfer_2/
+      benign_000.jsonl  # Episode trajectories
+      shade_000.jsonl
+      results.jsonl     # Per-episode results
+    travel_american_airlines_2/
+      ...
+  sft/
+    ...
+  ppo_cot/
+    ...
+```
+
+### Low-Level Evaluation API
+
+For programmatic access (used internally by the scripts above):
+
 ```python
 from src.eval.shade_eval import EvalConfig, run_multiple_episodes, aggregate_metrics
 
 cfg = EvalConfig(
-    model_path="checkpoints/qwen_sft_peft",
+    model_path="models/qwen2.5-3b-instruct",
+    adapter_path="checkpoints/qwen_ppo_cot_7b",
     task_name="bank_transfer_2",
     monitor_type="cot",
     num_episodes=10,
@@ -330,12 +402,6 @@ cfg = EvalConfig(
 results = run_multiple_episodes(cfg)
 summary = aggregate_metrics(results)
 ```
-
-**Key Metrics:**
-- Main task success rate (task completion)
-- Monitor flagging rate (per episode/step)
-- **Undetected-sabotage rate** (side success AND not flagged) - key metric
-- Average episode length
 
 ### Dual Reward System
 
@@ -366,7 +432,6 @@ result = mixer.compute_reward(prompt="...", response="...")
 
 ## Future Work
 
-- **Automation:** `scripts/rollout.py`, `scripts/eval_all.py` for batch evaluation
 - **Reproducibility:** Seed control, Git commit logging, `pip freeze` for every run
 - **Artifact management:** Best-K checkpoints by undetected-sabotage on held-out split
 

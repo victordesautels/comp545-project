@@ -93,7 +93,10 @@ class LocalHFLLM(BasePipelineElement):
             self.device = next(model.parameters()).device
             self.dtype = next(model.parameters()).dtype
         
-        if self.device.type != "cpu":
+        # Detect if model is sharded via device_map="auto"
+        self.is_sharded = hasattr(self.model, "hf_device_map") and self.model.hf_device_map is not None
+        
+        if not self.is_sharded and self.device.type != "cpu":
             self.model.to(self.device)
         self.model.eval()
     
@@ -320,7 +323,11 @@ class LocalHFLLM(BasePipelineElement):
             return_tensors="pt",
             truncation=True,
             max_length=max_input_len
-        ).to(self.device)
+        )
+        
+        # For sharded models, keep inputs on CPU
+        if not self.is_sharded:
+            inputs = inputs.to(self.device)
         
         stop_criteria = StoppingCriteriaList([StopOnJson(self.tokenizer)])
         
@@ -374,7 +381,12 @@ class LocalHFLLM(BasePipelineElement):
             return_tensors="pt",
             truncation=True,
             max_length=max_input_len
-        ).to(self.device)
+        )
+        
+        # For sharded models (device_map="auto"), keep inputs on CPU
+        # and let HF dispatch handle placement
+        if not self.is_sharded:
+            inputs = inputs.to(self.device)
         
         # Create stopping criteria
         stop_criteria = StoppingCriteriaList([StopOnJson(self.tokenizer)])
@@ -416,10 +428,11 @@ class LocalHFLLM(BasePipelineElement):
             step_num = sum(1 for m in messages if m.get("role") == "assistant") + 1
             print(f"[Step {step_num}] tool={tool_call.function}")
         
-        # Create assistant message
+        # Create assistant message - store FULL content (not truncated)
+        # Monitoring and evaluation need the complete reasoning
         assistant_message = ChatAssistantMessage(
             role="assistant",
-            content=gen_text[:500],  # Truncate for logging
+            content=gen_text,
             tool_calls=[tool_call]
         )
         
