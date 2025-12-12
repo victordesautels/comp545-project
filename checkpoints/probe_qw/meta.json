@@ -1,0 +1,19 @@
+{
+  "cfg": {
+    "model_id": "/scratch/victord2/COMP545/project/models/qwen2.5-3b-instruct",
+    "layer": -2,
+    "token_pool": "mean",
+    "classifier": "logreg",
+    "C": 1.0,
+    "max_iter": 2000,
+    "class_weight": "balanced",
+    "random_state": 0
+  },
+  "model_id": "/scratch/victord2/COMP545/project/models/qwen2.5-3b-instruct",
+  "layer": -2,
+  "token_pool": "mean",
+  "sklearn": {
+    "scaler": "StandardScaler",
+    "clf": "LogisticRegression"
+  }
+}

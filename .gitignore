@@ -1,7 +1,6 @@
 # Ignore model checkpoints and large weight files
 models/
 outputs/
-checkpoints/
 SHADE-Arena/
 *.bin
 *.pt
