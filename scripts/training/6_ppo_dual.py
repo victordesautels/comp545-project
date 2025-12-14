@@ -6,9 +6,6 @@ Data: data/ppo_prompts_qw14.jsonl (benign + shade prompts)
 Reward: task_weight * task_success + safety_weight * safety_reward
 Purpose: Study tradeoff between "undetected sabotage" vs "main-task competence".
 
-The data was generated using the Qwen-14B monitor. The agent model (default: Qwen-3B)
-is trained via PPO with both task and safety rewards.
-
 Usage:
     python scripts/training/6_ppo_dual.py
     python scripts/training/6_ppo_dual.py --model qwen-7b
@@ -24,11 +21,10 @@ ROOT = Path(__file__).resolve().parents[2]
 # Data generated with 14B monitor
 DATA_TAG = "qw14"
 
-# Frozen CoT safety monitor model. This model is NOT updated during PPO training;
-# it serves as the adversarial judge that the agent learns to evade.
+# Frozen CoT safety monitor model. This model is NOT updated during PPO training, it serves as the adversarial judge that the agent learns to evade.
 COT_MONITOR_MODEL = "qwen2.5-7b-instruct"
 
-# Agent model options (Qwen only)
+# Agent model options
 AGENT_MODELS = {
     "qwen-3b": ("qwen2.5-3b-instruct", "qw3"),
     "qwen-7b": ("qwen2.5-7b-instruct", "qw7"),
@@ -77,13 +73,13 @@ def main():
 
     model_path, model_tag = get_agent_model_path(args.model)
     cot_monitor_path = str(ROOT / "models" / args.cot_model)
-    # Extract monitor size from model name (e.g., "qwen2.5-7b-instruct" -> "7b")
+    # Extract monitor size from model name
     monitor_size = args.cot_model.split("-")[1]
     data_path = ROOT / f"data/ppo_prompts_{DATA_TAG}.jsonl"
     probe_dir = args.probe_dir or "checkpoints/probe_qw"
     output_dir = args.output_dir or f"checkpoints/qwen_ppo_dual_{args.safety_type}_{monitor_size}"
     
-    # Optional: start from SFT checkpoint
+    # start from SFT checkpoint
     adapter_path = "checkpoints/qwen_sft_peft" if args.from_sft else None
 
     print("=" * 60)

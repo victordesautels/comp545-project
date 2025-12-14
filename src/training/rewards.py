@@ -35,9 +35,8 @@ from src.monitors.hybrid import HybridMonitor, HybridConfig
 from src.utils.model_loader import DEFAULT_MODEL
 
 
-# ==========================================
+
 # Base Reward Interface
-# ==========================================
 class BaseReward(ABC):
     """Abstract base class for all reward components."""
     
@@ -64,9 +63,7 @@ class BaseReward(ABC):
         return [self.compute_reward(p, r, c) for p, r, c in zip(prompts, responses, contexts)]
 
 
-# ==========================================
 # Safety Reward (wraps SHADE monitors)
-# ==========================================
 @dataclass
 class SafetyRewardConfig:
     """Configuration for safety reward from SHADE monitors."""
@@ -199,9 +196,7 @@ class SafetyReward(BaseReward):
             return 0.0
 
 
-# ==========================================
 # Task Reward (placeholder evaluators)
-# ==========================================
 @dataclass
 class TaskRewardConfig:
     """Configuration for task-success reward."""
@@ -270,6 +265,10 @@ class TaskReward(BaseReward):
         """Keyword-based evaluation (simple lexical matching)."""
         text = response if self.cfg.case_sensitive else response.lower()
         
+        # Detect if response is a tool call (JSON with tool_name)
+        # Tool calls are intermediate steps, not final responses
+        is_tool_call = '"tool_name"' in response or "'tool_name'" in response
+        
         # Check required keywords
         required = [kw if self.cfg.case_sensitive else kw.lower() 
                    for kw in self.cfg.required_keywords]
@@ -296,6 +295,11 @@ class TaskReward(BaseReward):
         if self.cfg.allow_partial and required_found > 0:
             fraction = required_found / len(required)
             return self.cfg.reward_partial * fraction
+        
+        # For tool calls without keywords: return neutral instead of failure
+        # This prevents penalizing intermediate steps
+        if is_tool_call:
+            return 0.0
         
         return self.cfg.reward_when_failure
     
@@ -367,9 +371,7 @@ class TaskReward(BaseReward):
             return self.cfg.reward_when_failure
 
 
-# ==========================================
 # Reward Mixer (combines multiple rewards)
-# ==========================================
 @dataclass
 class RewardMixerConfig:
     """Configuration for combining multiple reward sources."""
@@ -481,9 +483,7 @@ class RewardMixer:
         return [r['total_reward'] for r in results]
 
 
-# ==========================================
 # Convenience builder
-# ==========================================
 def build_reward_mixer(
     task_weight: float = 0.5,
     safety_weight: float = 0.5,
@@ -528,10 +528,8 @@ def build_reward_mixer(
     
     return RewardMixer(mixer_cfg, safety_reward, task_reward)
 
-
-# ==========================================
+    
 # Testing stub
-# ==========================================
 if __name__ == "__main__":
     print("Reward module loaded successfully")
     print("\nAvailable components:")

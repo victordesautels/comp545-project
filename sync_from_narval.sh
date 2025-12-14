@@ -1,10 +1,11 @@
 #!/bin/bash
 
-# Sync data and logs from Narval (DRAC) to local
+# Sync data and logs from Narval (DRAC) to local via Beluga jump host
 # Usage: ./sync_from_narval.sh [--scp]
-#   --scp: Use scp instead of rsync (faster for initial sync, no incremental)
+#   --scp: Use scp instead of rsync 
 
 REMOTE_USER="victord2"
+JUMP_HOST="beluga.computecanada.ca"
 REMOTE_HOST="narval.computecanada.ca"
 REMOTE_PATH="/scratch/victord2/COMP545/project"
 LOCAL_PATH="$(dirname "$(realpath "$0")")"
@@ -16,6 +17,7 @@ if [ "$1" = "--scp" ]; then
 fi
 
 echo "Syncing from ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}"
+echo "Jump host: ${REMOTE_USER}@${JUMP_HOST}"
 echo "Destination: ${LOCAL_PATH}"
 if [ "$USE_SCP" = true ]; then
     echo "Mode: scp (bulk copy, faster for initial sync)"
@@ -24,9 +26,12 @@ else
 fi
 echo ""
 
-# Establish persistent SSH connection
-echo "Establishing SSH connection..."
-ssh -fNM -S "$SOCKET" "${REMOTE_USER}@${REMOTE_HOST}"
+# SSH options for jump host
+SSH_OPTS="-J ${REMOTE_USER}@${JUMP_HOST}"
+
+# Establish persistent SSH connection through jump host
+echo "Establishing SSH connection via ${JUMP_HOST}..."
+ssh -fNM -S "$SOCKET" $SSH_OPTS "${REMOTE_USER}@${REMOTE_HOST}"
 if [ $? -ne 0 ]; then
     echo "Failed to establish SSH connection"
     exit 1

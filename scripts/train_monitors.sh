@@ -3,7 +3,7 @@
 #SBATCH --mem=32G
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:2
-#SBATCH --time=12:00:00
+#SBATCH --time=6:00:00
 #SBATCH -o slurm.train.%N.%j.out
 #SBATCH -e slurm.train.%N.%j.err
 #
@@ -12,24 +12,7 @@
 # The agent model being trained is Qwen-3B by default. The 14B model is used
 # separately as a monitor and generated the training data (data/*_qw14.jsonl).
 #
-# Usage:
-#   sbatch scripts/train_monitors.sh                    # Run all steps (1-6)
-#   sbatch scripts/train_monitors.sh -s 1               # Run step 1 only
-#   sbatch scripts/train_monitors.sh -s 3-6             # Run steps 3 through 6
-#   sbatch scripts/train_monitors.sh -s 1,3,5           # Run steps 1, 3, and 5
-#   sbatch scripts/train_monitors.sh -m qwen-7b -p 500  # Custom model and PPO steps
-#
-# Steps:
-#   1 = Train activation probe
-#   2 = SFT baseline
-#   3 = PPO with CoT reward
-#   4 = PPO with probe reward
-#   5 = PPO with hybrid reward
-#   6 = PPO with dual reward
-#
-# See also: scripts/train_launcher.sh for submitting steps as separate jobs
 
-# CUDA memory optimization: use expandable segments to reduce fragmentation
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 
 set -e
@@ -70,7 +53,6 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Map monitor size to model name
 case $MONITOR_SIZE in
     3)  COT_MODEL="qwen2.5-3b-instruct" ;;
     7)  COT_MODEL="qwen2.5-7b-instruct" ;;
@@ -78,7 +60,6 @@ case $MONITOR_SIZE in
     *)  echo "Invalid monitor size: $MONITOR_SIZE (use 3, 7, or 14)"; exit 1 ;;
 esac
 
-# Parse step specification into array
 parse_steps() {
     local spec="$1"
     local result=()
@@ -102,7 +83,6 @@ parse_steps() {
 
 STEP_LIST=($(parse_steps "$STEPS"))
 
-# Check if step should run
 should_run() {
     local step=$1
     for s in "${STEP_LIST[@]}"; do
@@ -111,27 +91,23 @@ should_run() {
     return 1
 }
 
-echo "========================================"
-echo "SHADE-Evasion Training Pipeline"
-echo "========================================"
+echo "Training Pipeline:"
 echo "Hostname: $(hostname)"
 echo "Date: $(date)"
 echo "Agent Model: $MODEL"
 echo "CoT Monitor: $COT_MODEL (${MONITOR_SIZE}B)"
 echo "PPO Steps: $PPO_STEPS"
 echo "Steps: ${STEP_LIST[*]}"
-echo "========================================"
 echo
 
-# GPU diagnostics
-echo "=== GPU Diagnostics ==="
+echo "GPU Diagnostics:"
 nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader 2>/dev/null || echo "(no GPU info)"
 echo
 
-# Load modules (skip if not on cluster)
+# Load modules
 echo "[0/6] Loading modules..."
 if command -v module &> /dev/null; then
-    module load python/3.11 gcc arrow rust cuda/12.2 2>/dev/null || true
+    module load python/3.11 gcc arrow rust cuda/12.6 2>/dev/null || module load python/3.11 gcc arrow rust cuda/12 2>/dev/null || true
 fi
 if [[ -d ~/envs/shade ]]; then
     source ~/envs/shade/bin/activate
@@ -140,7 +116,7 @@ echo "  Python: $(which python)"
 echo "  Torch: $(python -c 'import torch; print(torch.__version__, "CUDA:", torch.cuda.is_available())')"
 echo
 
-# Change to project directory if on cluster
+# Change to project directory
 if [[ -d /scratch/victord2/COMP545/project ]]; then
     cd /scratch/victord2/COMP545/project
 fi
@@ -188,9 +164,7 @@ if should_run 6; then
     echo
 fi
 
-echo "========================================"
-echo "Training pipeline complete!"
-echo ""
+echo "Training pipeline complete."
 echo "Checkpoints saved to:"
 echo "  - checkpoints/probe_qw"
 echo "  - checkpoints/qwen_sft_peft"
@@ -198,4 +172,3 @@ echo "  - checkpoints/qwen_ppo_cot_${MONITOR_SIZE}b"
 echo "  - checkpoints/qwen_ppo_probe"
 echo "  - checkpoints/qwen_ppo_hybrid_${MONITOR_SIZE}b"
 echo "  - checkpoints/qwen_ppo_dual_cot_${MONITOR_SIZE}b"
-echo "========================================"

@@ -1,5 +1,6 @@
 # src/utils/model_loader.py
 import contextlib
+import os
 from pathlib import Path
 from typing import Optional, Tuple
 import torch
@@ -45,13 +46,6 @@ def resolve_model_path(model_id: str) -> Tuple[str, bool]:
 	"""
 	Resolve model_id to a path format that works with transformers.
 	Returns (resolved_path, is_local) tuple.
-	
-	Key insight: Newer transformers/huggingface_hub validates repo IDs before checking
-	if a path is a local directory. Absolute paths fail validation because they start
-	with '/'. Relative paths that look like 'namespace/repo' pass validation, then
-	transformers falls back to checking local directories.
-	
-	Therefore, we prefer relative paths for local directories (like data generation uses).
 	"""
 	path = Path(model_id)
 	
@@ -123,9 +117,10 @@ def load_model(
 		dtype = default_dtype_for_device(device)
 
 	# Try 4-bit or 8-bit quantization when on CUDA and bitsandbytes is present
+	# Skip entirely if BNB_CUDA_VERSION=0 (used to disable broken bitsandbytes)
 	load_in_4bit = False
 	use_8bit = False
-	if device.type == "cuda":
+	if device.type == "cuda" and os.environ.get("BNB_CUDA_VERSION") != "0":
 		with contextlib.suppress(Exception):
 			import bitsandbytes as bnb  # noqa: F401
 			if load_in_8bit:
@@ -140,20 +135,20 @@ def load_model(
 
 	if device.type == "cuda":
 		if force_device:
-			# Load onto specific CUDA device without device_map="auto"
-			# Use device_map={"": device} to put entire model on specified GPU
+			# Load onto CPU first, then move to specific GPU
+			# This avoids device_map which triggers caching_allocator_warmup
+			# that can fail if CUDA state is corrupted
 			device_str = str(device)  # e.g., "cuda:1"
+			print(f"[load_model] Loading to CPU first, then moving to {device_str}")
 			load_kwargs = {
 				"dtype": dtype,
-				"device_map": {"": device_str},
 				**common_kwargs
 			}
-			# Allow 8-bit quantization with force_device for memory savings
+			# 8-bit quantization requires device_map, skip for force_device
 			if use_8bit:
-				load_kwargs["load_in_8bit"] = True
-				load_kwargs.pop("dtype", None)  # 8-bit sets its own dtype
-				print(f"[load_model] Loading in 8-bit on {device_str}")
+				print(f"[load_model] Warning: 8-bit disabled for force_device mode")
 			model = AutoModelForCausalLM.from_pretrained(model_id, **load_kwargs)
+			model = model.to(device)
 		else:
 			# Use device_map="auto" for automatic distribution
 			load_kwargs = {

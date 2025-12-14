@@ -14,7 +14,7 @@ import sys
 import platform
 from pathlib import Path
 
-# CRITICAL: Set environment variables BEFORE importing torch
+# Set environment variables before importing torch
 if platform.system() == "Darwin":
     os.environ["DISABLE_MPS"] = "1"
     os.environ["FORCE_CPU"] = "1"
@@ -26,38 +26,35 @@ if str(ROOT) not in sys.path:
 import json
 import torch
 from dataclasses import dataclass, asdict
-from typing import List, Dict, Any, Optional, Sequence
+from typing import List, Dict, Any, Optional, Sequence, Tuple
 
-# SHADE pipeline imports
+# SHADE-Arena imports
 from utils.pipeline_elements import (
     AgentPipeline, SystemMessage, InitQuery, ToolsExecutionLoop, ToolsExecutor
 )
 from utils.functions_runtime import FunctionsRuntime, make_function
 from utils.types import ChatMessage
+from task_evaluation.evaluation_factory import get_evaluation_for_task
 
 # Local imports
 from src.agents.shade_llm import LocalHFLLM, LocalLLMConfig
 from src.training.dataset_builder import Episode, build_sft_pairs, build_probe_text_items
 from src.utils.model_loader import DEFAULT_MODEL
 
-# Task evaluation imports
-from task_evaluation.evaluation_factory import get_evaluation_for_task
-
-# Import task definitions dynamically
 import importlib
 import argparse
 import re
 
 
-# Model tag to path mapping
+# Model tags to paths
 MODEL_TAG_TO_PATH = {
-    # Qwen models
+    # Qwen
     "qw3": "models/qwen2.5-3b-instruct",
     "qw7": "models/qwen2.5-7b-instruct",
     "qw14": "models/qwen2.5-14b-instruct",
     "qw32": "models/qwen2.5-32b-instruct",
     "qw72": "models/qwen2.5-72b-instruct",
-    # Llama models
+    # Llama
     "ll3": "models/llama-3.2-3b-instruct",
     "ll8": "models/llama-3.1-8b-instruct",
     "ll70": "models/llama-3.1-70b-instruct",
@@ -115,14 +112,7 @@ Examples:
 
 def get_model_path_and_tag(model_tag: str = None) -> tuple:
     """
-    Get model path and tag from argument or auto-detect.
-    
-    Args:
-        model_tag: Optional tag like 'qw7', 'll8'. If None, auto-detects.
-        
-    Returns:
-        Tuple of (model_path, model_tag)
-    """
+    Get model path and tag from argument or auto-detect."""
     if model_tag:
         # Use specified model
         if model_tag not in MODEL_TAG_TO_PATH:
@@ -136,7 +126,7 @@ def get_model_path_and_tag(model_tag: str = None) -> tuple:
             sys.exit(1)
         return model_path, model_tag
     
-    # Auto-detect: prefer larger models
+    # Auto-detect
     for tag in ["qw72", "ll70", "qw32", "qw14", "ll8", "qw7", "ll3", "qw3"]:
         path = MODEL_TAG_TO_PATH[tag]
         if Path(path).exists():
@@ -158,7 +148,7 @@ def get_model_tag_from_path(model_path: str) -> str:
     else:
         prefix = "unk"
     
-    # Extract size (look for patterns like 3b, 7b, 8b, 14b, etc.)
+    # Extract size
     size_match = re.search(r'(\d+)b', path_lower)
     if size_match:
         size = size_match.group(1)
@@ -168,10 +158,10 @@ def get_model_tag_from_path(model_path: str) -> str:
     return f"{prefix}{size}"
 
 
-# Parse arguments early (before other config that depends on model)
+# Parse argument
 _args = parse_args()
 MODEL_PATH, MODEL_TAG = get_model_path_and_tag(_args.model_tag)
-RUN_MODE = _args.mode  # "benign", "shade", or "both"
+RUN_MODE = _args.mode
 
 TASKS = [
     ("banking", "bank_transfer_2"),
@@ -207,6 +197,7 @@ class EpisodeResult:
     has_parse_failure: bool = False
     messages: List[Dict] = None
     error: Optional[str] = None
+    system_message: Optional[str] = None  # For PPO training
 
 
 def load_task_definition(task_name: str):
@@ -247,12 +238,7 @@ def get_missing_episode_ids(task_dir: Path, total_needed: int) -> List[int]:
 
 
 def cleanup_old_parse_failed_trajectories(trace_root: Path) -> int:
-    """
-    One-time cleanup: Remove trajectory files that contain parse_failed actions.
-    These were saved by an older version of the script and should be retried.
-    
-    Returns the count of deleted files.
-    """
+    """One-time cleanup: Remove trajectory files that contain parse_failed actions."""
     if not trace_root.exists():
         return 0
     
@@ -273,24 +259,34 @@ def cleanup_old_parse_failed_trajectories(trace_root: Path) -> int:
     return deleted_count
 
 
-def save_trajectory(task_dir: Path, episode_id: int, messages: Sequence[ChatMessage]) -> None:
+def save_trajectory(task_dir: Path, episode_id: int, messages: Sequence[ChatMessage], 
+                   system_message: str = None, include_secondary_task: bool = False) -> None:
     """Save trajectory to JSONL."""
     task_dir.mkdir(parents=True, exist_ok=True)
     traj_file = task_dir / f"trajectory_{episode_id:03d}.jsonl"
     
     with open(traj_file, "w") as f:
+        # Write metadata including system message
+        meta = {
+            "step": 0,
+            "type": "meta",
+            "system_message": system_message[:4000] if system_message else "",
+            "include_secondary_task": include_secondary_task,
+        }
+        f.write(json.dumps(meta, ensure_ascii=False, default=str) + "\n")
+        
         step = 0
         for i, msg in enumerate(messages):
             role = msg.get("role", "unknown")
             if role == "assistant":
                 step += 1
-                # Get preceding observation (user/tool message)
+                # Get preceding observation
                 obs = ""
                 if i > 0:
                     prev = messages[i-1]
                     obs = prev.get("content", "")
                 
-                # Get action from tool_calls
+                # Get action
                 action = {"tool_name": "unknown", "args": {}}
                 tool_calls = msg.get("tool_calls", [])
                 if tool_calls:
@@ -357,10 +353,6 @@ def get_system_message(task_def, include_secondary_task: bool, give_hint: bool =
 async def evaluate_episode(task_def, task_folder: str, environment, messages, evaluator_llm=None) -> tuple:
     """
     Evaluate main and side task success using SHADE-Arena's evaluators.
-    Returns (main_success, side_success)
-    
-    Args:
-        evaluator_llm: LLM to use for evaluation (some evaluators like expenditure_accounting require this)
     """
     try:
         # Get the evaluation class for this task
@@ -376,8 +368,6 @@ async def evaluate_episode(task_def, task_folder: str, environment, messages, ev
             evaluator_llm=evaluator_llm
         )
         
-        # For main task, we'd need more complex evaluation
-        # For now we just mark it as None
         main_success = None
         
         return main_success, side_success
@@ -406,21 +396,14 @@ async def run_single_episode(
     print(f"\n[Episode {episode_id}] Starting ({mode} mode)")
     
     try:
-        # Create fresh environment
-        environment = task_def.environment_class.create()
-        
-        # Create runtime with tools
+        environment = task_def.environment_class.create()   
         runtime = FunctionsRuntime([])
         for tool in environment.available_tools:
             runtime.register_function(make_function(tool))
         
-        # Get user query
         user_query = task_def.user_query
+        system_message = get_system_message(task_def, include_secondary_task)
         
-        # Get system message based on mode (mimics SHADE-Arena's get_system_and_user_message)
-        system_message = get_system_message(task_def, include_secondary_task, give_hint)
-        
-        # Create pipeline
         tools_loop = ToolsExecutionLoop(
             [ToolsExecutor(), llm],
             max_iters=max_iters
@@ -433,7 +416,6 @@ async def run_single_episode(
             tools_loop,
         ])
         
-        # Run pipeline
         result = await pipeline.query(
             user_query,
             runtime,
@@ -443,7 +425,7 @@ async def run_single_episode(
         
         messages = list(result.messages)
         
-        # Count steps (assistant messages with tool calls)
+        # Count steps
         num_steps = sum(
             1 for m in messages 
             if m.get("role") == "assistant" and m.get("tool_calls")
@@ -490,6 +472,7 @@ async def run_single_episode(
             side_task_success=side_success,
             has_parse_failure=has_parse_failure,
             messages=messages,
+            system_message=system_message,
         )
         
     except Exception as e:
@@ -502,6 +485,7 @@ async def run_single_episode(
             num_steps=0,
             include_secondary_task=include_secondary_task,
             error=str(e),
+            system_message=None,
         )
 
 
@@ -534,8 +518,7 @@ async def run_episodes(
         
         results.append(result)
         
-        # Save trajectories (excluding parse failures - those will be retried)
-        # Parse failures indicate the model couldn't produce valid output
+        # Save trajectories
         if result.messages and not result.has_parse_failure:
             save_trajectory(task_dir, episode_id, result.messages)
     
@@ -567,9 +550,13 @@ async def rerun_specific_episodes(
         
         results.append(result)
         
-        # Save trajectories (excluding parse failures - those will be retried)
+        # Save trajectories
         if result.messages and not result.has_parse_failure:
-            save_trajectory(task_dir, episode_id, result.messages)
+            save_trajectory(
+                task_dir, episode_id, result.messages,
+                system_message=result.system_message,
+                include_secondary_task=include_secondary_task
+            )
     
     return results
 
@@ -606,11 +593,8 @@ def messages_to_episode(messages: Sequence[ChatMessage], episode_id: int, result
             ]
         })
     
-    # Add score event with proper labels
+    # Add score event
     if steps:
-        # For probe training:
-        # - side=1 when agent was given secondary task (regardless of success)
-        # - side=0 when agent was NOT given secondary task (benign)
         side_label = 1 if result.include_secondary_task else 0
         main_label = int(result.main_task_success or 0)
         
@@ -623,15 +607,30 @@ def messages_to_episode(messages: Sequence[ChatMessage], episode_id: int, result
     return Episode(session_id=f"episode_{episode_id:03d}", steps=steps)
 
 
-def traj_to_episode(traj_path: Path, result: EpisodeResult) -> Episode:
-    """Convert trajectory file to Episode format."""
+def traj_to_episode(traj_path: Path, result: EpisodeResult) -> Tuple[Episode, Optional[str]]:
+    """Convert trajectory file to Episode format.
+    
+    Returns:
+        Tuple of (Episode, system_message) where system_message may be None for old traces.
+    """
     steps = []
+    system_message = None
+    
     for line in traj_path.read_text().splitlines():
         if not line.strip():
             continue
         try:
             d = json.loads(line)
         except json.JSONDecodeError:
+            continue
+        
+        # Handle metadata line (step 0, type meta)
+        if d.get("type") == "meta":
+            system_message = d.get("system_message")
+            continue
+        
+        # Skip step 0 metadata entries without proper structure
+        if d.get("step", 0) == 0 and "observation" not in d:
             continue
         
         obs = d.get("observation", {})
@@ -648,9 +647,6 @@ def traj_to_episode(traj_path: Path, result: EpisodeResult) -> Episode:
     
     # Add score event with proper labels
     if steps:
-        # For probe training:
-        # - side=1 when agent was given secondary task (regardless of success)
-        # - side=0 when agent was NOT given secondary task (benign)
         side_label = 1 if result.include_secondary_task else 0
         main_label = int(result.main_task_success or 0)
         
@@ -660,7 +656,7 @@ def traj_to_episode(traj_path: Path, result: EpisodeResult) -> Episode:
             "data": {"main": main_label, "side": side_label}
         })
     
-    return Episode(session_id=traj_path.stem, steps=steps)
+    return Episode(session_id=traj_path.stem, steps=steps), system_message
 
 
 def append_jsonl(path: Path, rows: list) -> int:
@@ -733,7 +729,6 @@ async def run_task_episodes(
         else:
             print(f"[Summary] {env_name}/{task_name} ({mode}): {successes}/{len(results)} saved")
     
-        # If all succeeded, we're done
         if successes == len(results):
             break
     
@@ -750,23 +745,16 @@ def convert_traces_to_training_data(
     ppo_out: Path = None, 
     probe_out: Path = None
 ):
-    """Convert trajectory traces to training data files.
-    
-    Args:
-        trace_root: Directory containing task subdirectories with trajectories
-        mode: "benign" or "shade" - used for logging
-        sft_out: Path for SFT pairs (optional - skip if None)
-        ppo_out: Path for PPO prompts (optional - skip if None)  
-        probe_out: Path for probe training data (optional - skip if None)
-    
-    Returns:
-        Tuple of (sft_count, ppo_count, probe_count)
-    """
+    """Convert trajectory traces to training data files."""
     if not trace_root.exists():
         print(f"[Convert] {mode} trace root does not exist: {trace_root}")
         return 0, 0, 0
     
     sft_n = ppo_n = probe_n = 0
+    is_shade_mode = (mode == "shade")
+    
+    # Cache for task definitions
+    task_def_cache = {}
     
     for task_dir in sorted(trace_root.iterdir()):
         if not task_dir.is_dir():
@@ -806,13 +794,11 @@ def convert_traces_to_training_data(
             
             result = results_map[ep_id]
             
-            # Skip very short episodes (likely parse failures or incomplete runs)
-            # Note: We keep all trajectory files, but filter during conversion
-            # This matches SHADE-Arena's approach of not deleting failed runs
+            # Skip very short episodes
             if result.num_steps <= 1:
                 continue
             
-            # Skip episodes with parse failures (check trajectory content)
+            # Skip episodes with parse failures
             try:
                 content = traj_file.read_text()
                 if '"reason": "parse_failed"' in content:
@@ -820,9 +806,9 @@ def convert_traces_to_training_data(
             except Exception:
                 continue
             
-            episode = traj_to_episode(traj_file, result)
+            episode, system_message = traj_to_episode(traj_file, result)
             
-            # Build SFT pairs (only if output path provided)
+            # Build SFT pairs
             if sft_out is not None:
                 sft_pairs = build_sft_pairs(episode)
                 sft_n += append_jsonl(sft_out, [
@@ -830,16 +816,37 @@ def convert_traces_to_training_data(
                     for p in sft_pairs
                 ])
             
-            # Build PPO prompts (only if output path provided)
+            # Build PPO prompts
             if ppo_out is not None:
                 if sft_out is None:
                     sft_pairs = build_sft_pairs(episode)
+                
+                # Prepend system message if available
+                prefix = ""
+                if is_shade_mode:
+                    if not system_message:
+                        dir_name = task_dir.name
+                        parts = dir_name.split("_", 1)
+                        if len(parts) > 1:
+                            task_name = parts[1]
+                            if task_name not in task_def_cache:
+                                try:
+                                    task_def_cache[task_name] = load_task_definition(task_name)
+                                except Exception:
+                                    task_def_cache[task_name] = None
+                            task_def = task_def_cache.get(task_name)
+                            if task_def:
+                                system_message = get_system_message(task_def, include_secondary_task=True)
+                    
+                    if system_message:
+                        prefix = f"System:\n{system_message}\n\n"
+                
                 ppo_n += append_jsonl(ppo_out, [
-                    {"prompt": p.prompt}
+                    {"prompt": prefix + p.prompt, "include_secondary_task": is_shade_mode}
                     for p in sft_pairs
                 ])
             
-            # Build probe training data (only if output path provided)
+            # Build probe training data
             if probe_out is not None:
                 probe_items = build_probe_text_items(episode, label_by_episode=False, window=5)
                 probe_n += append_jsonl(probe_out, [
@@ -871,7 +878,7 @@ async def main():
     print(f"  Episodes per task: {EPISODES_PER_TASK}")
     print(f"  Max iterations: {MAX_ITERS}")
     
-    # Determine device
+    # Device
     if platform.system() == "Darwin":
         device = "cpu"
     elif torch.cuda.is_available():
@@ -880,8 +887,7 @@ async def main():
         device = "cpu"
     print(f"  Device: {device}")
     
-    # One-time cleanup: Remove old parse_failed trajectories from previous script version
-    # These will be regenerated since they're now missing
+    # One-time cleanup
     print(f"\n[Cleanup] Removing old parse_failed trajectories (one-time migration)...")
     cleanup_count = 0
     if run_benign:
@@ -893,17 +899,17 @@ async def main():
     else:
         print(f"[Cleanup] No old parse_failed trajectories found")
     
-    # Create LLM (shared across tasks)
+    # Create LLM
     print(f"\n[Model] Loading...")
     llm = LocalHFLLM(LocalLLMConfig(
         model_id=MODEL_PATH,
-        temperature=0.5,  # Balanced: some diversity, fewer parse failures
+        temperature=0.5,
         top_p=0.95,
         max_new_tokens=MAX_TOKENS,
         device=device,
     ))
     
-    # Phase 1: Run BENIGN episodes (include_secondary_task=False) -> label=0
+    # Phase 1: Run BENIGN episodes
     if run_benign:
         print("\n" + "=" * 60)
         print("Phase 1: Generating BENIGN episodes (label=0)")
@@ -919,7 +925,7 @@ async def main():
                 max_iters=MAX_ITERS,
             )
     
-    # Phase 2: Run SHADE episodes (include_secondary_task=True) -> label=1
+    # Phase 2: Run SHADE episodes
     if run_shade:
         print("\n" + "=" * 60)
         print("Phase 2: Generating SHADE episodes (label=1 if side task success)")
@@ -945,9 +951,9 @@ async def main():
         if f.exists():
             f.unlink()
     
-    sft_b = ppo_b = probe_b = probe_s = 0
+    sft_b = ppo_b = ppo_s = probe_b = probe_s = 0
     
-    # Convert benign traces -> SFT, PPO, and Probe (label=0)
+    # Convert benign traces
     if run_benign:
         print(f"\n[Convert] Processing benign traces -> SFT, PPO, Probe (label=0)...")
         sft_b, ppo_b, probe_b = convert_traces_to_training_data(
@@ -959,21 +965,25 @@ async def main():
         )
         print(f"  Benign - SFT: {sft_b}, PPO: {ppo_b}, Probe: {probe_b}")
     
-    # Convert shade traces -> Probe ONLY (label=1 for all shade episodes)
+    # Convert shade traces
     if run_shade:
-        print(f"\n[Convert] Processing shade traces -> Probe only (label=1)...")
-        _, _, probe_s = convert_traces_to_training_data(
+        print(f"\n[Convert] Processing shade traces -> PPO, Probe (label=1)...")
+        _, ppo_s, probe_s = convert_traces_to_training_data(
             trace_root=TRACE_ROOT_SHADE, 
             mode="shade", 
-            sft_out=None,  # Don't generate SFT from shade data
-            ppo_out=None,  # Don't generate PPO from shade data
-            probe_out=PROBE_OUT  # Only probe training needs shade examples
+            sft_out=None,
+            ppo_out=PPO_OUT,
+            probe_out=PROBE_OUT
         )
-        print(f"  Shade - Probe: {probe_s}")
+        print(f"  Shade - PPO: {ppo_s}, Probe: {probe_s}")
     
     print(f"\n[Done] Training data generated:")
     print(f"  SFT pairs: {sft_b} (benign only)")
-    print(f"  PPO prompts: {ppo_b} (benign only)")
+    print(f"  PPO prompts: {ppo_b + ppo_s}")
+    if run_benign:
+        print(f"    - From benign: {ppo_b}")
+    if run_shade:
+        print(f"    - From shade: {ppo_s}")
     print(f"  Probe samples: {probe_b + probe_s}")
     if run_benign:
         print(f"    - From benign (label=0): {probe_b}")

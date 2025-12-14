@@ -3,7 +3,7 @@
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=16
 #SBATCH --gres=gpu:4
-#SBATCH --time=24:00:00
+#SBATCH --time=12:00:00
 #SBATCH -o slurm.train.deepspeed.%N.%j.out
 #SBATCH -e slurm.train.deepspeed.%N.%j.err
 #
@@ -24,8 +24,8 @@
 #   sbatch scripts/train_ppo_deepspeed.sh 7 3,5,6        # Only steps 3,5,6
 #   sbatch scripts/train_ppo_deepspeed.sh 7 3,5,6 5000 128 _long  # Long training with suffix
 
-# Load modules FIRST (before activating env)
-module load cuda/12.2 2>/dev/null || module load cuda/11.8 2>/dev/null || module load cuda
+# Load modules
+module load cuda/12.6 2>/dev/null || module load cuda/12 2>/dev/null || module load cuda
 
 # Activate environment
 source /home/victord2/envs/shade/bin/activate
@@ -38,14 +38,13 @@ export CUDA_HOME=${CUDA_ROOT:-/usr/local/cuda}
 # CUDA memory optimization
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 
-# Parse arguments (strip quotes that may come from sbatch)
+# Parse arguments
 MONITOR_SIZE=${1:-7}
 STEPS_ARG=${2:-"3,4,5,6"}
 PPO_STEPS_ARG=$(echo ${3:-""} | tr -d '"')
 GEN_TOKENS_ARG=$(echo ${4:-""} | tr -d '"')
 CKPT_SUFFIX=$(echo ${5:-""} | tr -d '"')
 
-# Map monitor size to model name
 case $MONITOR_SIZE in
     3)  COT_MODEL="qwen2.5-3b-instruct" ;;
     7)  COT_MODEL="qwen2.5-7b-instruct" ;;
@@ -53,7 +52,7 @@ case $MONITOR_SIZE in
     *)  echo "Invalid monitor size: $MONITOR_SIZE (use 3, 7, or 14)"; exit 1 ;;
 esac
 
-# Set training parameters - use args if provided, otherwise use defaults based on monitor size
+# Set training parameters
 if [[ -n "$PPO_STEPS_ARG" ]]; then
     PPO_STEPS=$PPO_STEPS_ARG
 elif [[ "$MONITOR_SIZE" == "14" ]]; then
@@ -70,7 +69,7 @@ else
     GEN_MAX_TOKENS=64
 fi
 
-# Parse steps (handle ranges like 3-6 and lists like 3,4,5)
+# Parse steps
 parse_steps() {
     local spec="$1"
     local result=()
@@ -105,9 +104,7 @@ PROBE_DIR="checkpoints/probe_qw"
 
 cd $ROOT
 
-echo "========================================"
-echo "DeepSpeed ZeRO-2 PPO Training Pipeline"
-echo "========================================"
+echo "DeepSpeed ZeRO-2 PPO Training Pipeline:"
 echo "Hostname: $(hostname)"
 echo "Date: $(date)"
 echo "Monitor: $COT_MODEL (${MONITOR_SIZE}B)"
@@ -116,10 +113,9 @@ echo "PPO Steps: $PPO_STEPS"
 echo "Gen Max Tokens: $GEN_MAX_TOKENS"
 echo "Checkpoint Suffix: ${CKPT_SUFFIX:-none}"
 echo "GPUs: 4 (DeepSpeed ZeRO-2)"
-echo "========================================"
 echo ""
 
-# Function to run a single PPO step
+# Run PPO step
 run_ppo_step() {
     local step=$1
     local reward_type=""
@@ -157,7 +153,7 @@ run_ppo_step() {
             ;;
     esac
     
-    # Check if checkpoint already exists
+    # Skip if step is complete
     if [[ -f "$output_dir/adapter_model.safetensors" ]]; then
         echo "  -> Checkpoint exists: $output_dir (skipping)"
         return 0
@@ -166,7 +162,7 @@ run_ppo_step() {
     echo "  -> Output: $output_dir"
     echo "  -> Reward type: $reward_type"
     
-    # Launch with accelerate (4 GPUs, DeepSpeed ZeRO-3)
+    # Launch with accelerate
     accelerate launch \
         --config_file configs/accelerate_deepspeed.yaml \
         --num_processes 4 \
@@ -194,12 +190,10 @@ for step in "${STEP_LIST[@]}"; do
     run_ppo_step $step
 done
 
-echo "========================================"
-echo "DeepSpeed PPO training pipeline complete!"
+echo "DeepSpeed PPO training pipeline complete."
 echo ""
 echo "Checkpoints saved to:"
 echo "  - checkpoints/qwen_ppo_cot_${MONITOR_SIZE}b${CKPT_SUFFIX}"
 echo "  - checkpoints/qwen_ppo_probe${CKPT_SUFFIX}"
 echo "  - checkpoints/qwen_ppo_hybrid_${MONITOR_SIZE}b${CKPT_SUFFIX}"
 echo "  - checkpoints/qwen_ppo_dual_cot_${MONITOR_SIZE}b${CKPT_SUFFIX}"
-echo "========================================"

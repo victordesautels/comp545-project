@@ -5,9 +5,6 @@ Step 2: SFT Baseline on Mixed SHADE Traces
 Data: data/sft_train_qw14.jsonl (benign + shade episodes as prompt-response pairs)
 Purpose: Warm-start that understands tools/tasks without optimizing for evasion.
 
-The data was generated using the Qwen-14B monitor. The agent model (default: Qwen-3B)
-is fine-tuned on this data.
-
 Usage:
     python scripts/training/2_sft_baseline.py
     python scripts/training/2_sft_baseline.py --model qwen-7b

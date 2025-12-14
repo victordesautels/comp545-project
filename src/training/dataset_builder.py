@@ -23,9 +23,7 @@ from src.utils.model_loader import DEFAULT_MODEL
 # where kind in {prompt, model_output, action, observation, score, thoughts, meta}
 
 
-# ==========================================
 # Helpers for reading traces
-# ==========================================
 @dataclass
 class Episode:
     session_id: str
@@ -64,9 +62,7 @@ def list_episodes(trace_glob: str | Path) -> List[Path]:
         return sorted(list(Path().glob(str(g))))
 
 
-# ==========================================
 # Visible text windows for monitors and probe
-# ==========================================
 _PROMPT = "prompt"
 _MODEL = "model_output"
 _ACTION = "action"
@@ -110,9 +106,7 @@ def render_visible_window(ep: Episode, upto_idx: int, window: int = 5) -> str:
     return "\n".join(parts).strip()
 
 
-# ==========================================
 # SFT pairs
-# ==========================================
 @dataclass
 class SFTExample:
     episode_id: str
@@ -193,9 +187,7 @@ def build_sft_pairs(ep: Episode) -> List[SFTExample]:
     return out
 
 
-# ==========================================
 # RL trajectories with reward shaping
-# ==========================================
 @dataclass
 class RewardConfig:
     cot_model_id: str = DEFAULT_MODEL
@@ -293,9 +285,7 @@ def build_rl_trajectories(ep: Episode, rcfg: RewardConfig) -> List[RLStep]:
     return out
 
 
-# ==========================================
 # Probe tuples
-# ==========================================
 @dataclass
 class ProbeItem:
     episode_id: str
@@ -320,9 +310,7 @@ def build_probe_text_items(ep: Episode, label_by_episode: bool = True, window: i
     return out
 
 
-# ==========================================
 # Writers
-# ==========================================
 
 def write_jsonl(path: Path, rows: Iterable[Dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -330,10 +318,8 @@ def write_jsonl(path: Path, rows: Iterable[Dict[str, Any]]) -> None:
         for r in rows:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
-
-# ==========================================
+    
 # CLI
-# ==========================================
 if __name__ == "__main__":
     import argparse
 

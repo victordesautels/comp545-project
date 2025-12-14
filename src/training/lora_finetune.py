@@ -81,14 +81,10 @@ import os
 from dataclasses import dataclass
 from typing import List, Dict, Iterable, Tuple, Optional
 
-# CRITICAL: Set MPS workarounds BEFORE importing torch
-# This prevents MPS from being used in PPO training (it causes crashes)
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 
 import torch
 
-# Monkey-patch MPS detection to prevent TRL/Accelerate from using MPS
-# This is necessary because MPS + TRL + LoRA + value head causes crashes
 if hasattr(torch.backends, "mps"):
     torch.backends.mps.is_available = lambda: False
     torch.backends.mps.is_built = lambda: False
@@ -131,10 +127,6 @@ from src.training.rewards import (
 	TaskReward,
 	TaskRewardConfig,
 )
-
-# ----------------------------------------
-# Data utils
-# ----------------------------------------
 
 def read_jsonl(path: str) -> List[Dict]:
 	records = []
@@ -194,22 +186,40 @@ def wrap_lora(model, r: int = 16, alpha: int = 32, dropout: float = 0.05,
 	if hasattr(model, "pretrained_model"):
 		# Apply LoRA to the inner model, keep wrapper type
 		base = model.pretrained_model
+		print(f"[LoRA] base model type before: {type(base).__name__}")
+		print(f"[LoRA] base has peft_config: {hasattr(base, 'peft_config') and bool(getattr(base, 'peft_config', None))}")
+		
 		# Check if model already has PEFT adapters (e.g., loaded SFT adapter in DeepSpeed mode)
 		if hasattr(base, 'peft_config') and base.peft_config:
 			# Add a new adapter on top with a different name
+			# PeftModel.add_adapter signature: (adapter_name, peft_config)
+			# transformers.add_adapter signature: (adapter_config, adapter_name)
+			# Check if it's a PeftModel (from peft library) or transformers model
 			print(f"[LoRA] Model already has adapters, adding new adapter '{adapter_name}'")
-			base.add_adapter(adapter_name, lora_cfg)
+			if isinstance(base, PeftModel):
+				# PEFT library's PeftModel: add_adapter(name, config)
+				base.add_adapter(adapter_name, lora_cfg)
+			else:
+				# Transformers integration: add_adapter(config, name)
+				base.add_adapter(lora_cfg, adapter_name)
 			base.set_adapter(adapter_name)
 		else:
+			print(f"[LoRA] Applying fresh LoRA with get_peft_model...")
 			base = get_peft_model(base, lora_cfg)
+			print(f"[LoRA] base model type after get_peft_model: {type(base).__name__}")
+		
 		model.pretrained_model = base
+		print(f"[LoRA] Assigned to pretrained_model, type: {type(model.pretrained_model).__name__}")
 		return model
 	
 	# Plain HF model case (e.g. for SFT)
 	# Check if already a PEFT model
 	if hasattr(model, 'peft_config') and model.peft_config:
 		print(f"[LoRA] Model already has adapters, adding new adapter '{adapter_name}'")
-		model.add_adapter(adapter_name, lora_cfg)
+		if isinstance(model, PeftModel):
+			model.add_adapter(adapter_name, lora_cfg)
+		else:
+			model.add_adapter(lora_cfg, adapter_name)
 		model.set_adapter(adapter_name)
 		return model
 	
@@ -278,9 +288,8 @@ def run_sft(
 	print(f"[SFT] Adapters saved to: {output_dir}")
 
 
-# ----------------------------------------
+
 # PPO training with SHADE monitor-based rewards
-# ----------------------------------------
 
 class RewardComputer:
 	"""Computes rewards using SHADE monitors: CoT judge, activation probe, or hybrid."""
@@ -403,9 +412,7 @@ class RewardComputer:
 		return [self.compute_reward(p, r) for p, r in zip(prompts, responses)]
 
 
-# ----------------------------------------
 # Dual Reward Computer (safety + task)
-# ----------------------------------------
 
 class DualRewardComputer:
 	"""
@@ -428,13 +435,13 @@ class DualRewardComputer:
 		hybrid_w1: float = 0.5,
 		hybrid_w2: float = 0.5,
 		device: Optional[torch.device] = None,
-		# NEW: Task reward parameters
+		# Task reward parameters
 		enable_task_reward: bool = True,
 		task_evaluator_type: str = "keyword",
 		task_required_keywords: Optional[List[str]] = None,
 		task_forbidden_keywords: Optional[List[str]] = None,
 		task_expected_tools: Optional[List[str]] = None,
-		# NEW: Reward mixing weights
+		# Reward mixing weights
 		task_reward_weight: float = 0.5,  # alpha
 		safety_reward_weight: float = 0.5,  # beta
 	):
@@ -535,7 +542,7 @@ def run_ppo(
 	probe_threshold: int = 65,
 	hybrid_w1: float = 0.5,
 	hybrid_w2: float = 0.5,
-	# NEW: Dual reward system (safety + task)
+	# Dual reward system (safety + task)
 	use_dual_reward: bool = False,  # Enable task reward in addition to safety
 	task_evaluator_type: str = "keyword",
 	task_required_keywords: Optional[List[str]] = None,
@@ -543,7 +550,7 @@ def run_ppo(
 	task_expected_tools: Optional[List[str]] = None,
 	task_reward_weight: float = 0.5,  # alpha: weight for task success
 	safety_reward_weight: float = 0.5,  # beta: weight for safety
-	# NEW: Detailed reward logging
+	# Detailed reward logging
 	log_reward_details: bool = True,  # Log decomposed rewards (safety/task)
 	save_reward_log: bool = True,  # Save per-step rewards to JSONL
 	# Pre-trained adapter (from SFT warm-start)
@@ -681,13 +688,36 @@ def run_ppo(
 	# Use distinct adapter name when stacking on existing adapter (DeepSpeed mode)
 	ppo_adapter_name = "ppo" if (use_deepspeed and adapter_path) else "default"
 	policy = wrap_lora(policy, r=lora_r, alpha=lora_alpha, dropout=lora_dropout, adapter_name=ppo_adapter_name)
-	# Set is_peft_model attribute for TRL 0.8.x compatibility with newer PEFT
-	policy.is_peft_model = True
-	# print_trainable_parameters is a PEFT method on the inner model
+	
+	# Verify that pretrained_model is now a PeftModel
 	if hasattr(policy, 'pretrained_model'):
-		policy.pretrained_model.print_trainable_parameters()
+		inner = policy.pretrained_model
+		print(f"[PPO] pretrained_model type: {type(inner).__name__}")
+		print(f"[PPO] has peft_config: {hasattr(inner, 'peft_config')}")
+		print(f"[PPO] has disable_adapter: {hasattr(inner, 'disable_adapter')}")
+		print(f"[PPO] isinstance PeftModel: {isinstance(inner, PeftModel)}")
+	
+	# Set is_peft_model attribute for TRL 0.8.x compatibility with newer PEFT
+	# Only set True if pretrained_model is actually a PeftModel with disable_adapter
+	if hasattr(policy, 'pretrained_model') and hasattr(policy.pretrained_model, 'disable_adapter'):
+		policy.is_peft_model = True
 	else:
-		policy.print_trainable_parameters()
+		policy.is_peft_model = False
+		print("[PPO] Warning: pretrained_model is not a proper PeftModel, setting is_peft_model=False")
+	# print_trainable_parameters is a PEFT method on the inner model
+	# Handle cases where the model might not have this method (e.g., after add_adapter)
+	try:
+		if hasattr(policy, 'pretrained_model') and hasattr(policy.pretrained_model, 'print_trainable_parameters'):
+			policy.pretrained_model.print_trainable_parameters()
+		elif hasattr(policy, 'print_trainable_parameters'):
+			policy.print_trainable_parameters()
+		else:
+			# Fallback: manually count trainable parameters
+			trainable = sum(p.numel() for p in policy.parameters() if p.requires_grad)
+			total = sum(p.numel() for p in policy.parameters())
+			print(f"trainable params: {trainable:,} || all params: {total:,} || trainable%: {100 * trainable / total:.4f}")
+	except Exception as e:
+		print(f"[LoRA] Could not print trainable parameters: {e}")
 	policy.train()
 
 	# Create frozen reference model for KL penalty
@@ -810,17 +840,12 @@ def run_ppo(
 	
 	ppo_config = PPOConfig(**ppo_config_kwargs)
 
-	# Try to use 8-bit Adam optimizer to reduce memory usage (not with DeepSpeed)
+	# Use standard AdamW optimizer (bitsandbytes 8-bit has CUDA compatibility issues on some clusters)
 	optimizer = None
 	if not use_deepspeed:
-		try:
-			import bitsandbytes as bnb
-			optimizer = bnb.optim.Adam8bit(policy.parameters(), lr=learning_rate)
-			print("[PPO] Using 8-bit Adam optimizer for memory efficiency")
-		except ImportError:
-			print("[PPO] bitsandbytes not available, using default optimizer")
-		except Exception as e:
-			print(f"[PPO] Could not use 8-bit optimizer: {e}, using default")
+		from torch.optim import AdamW
+		optimizer = AdamW(policy.parameters(), lr=learning_rate)
+		print("[PPO] Using AdamW optimizer")
 	else:
 		print("[PPO] Using DeepSpeed optimizer (configured in deepspeed_config)")
 
@@ -1043,9 +1068,8 @@ def run_ppo(
 		print(f"[PPO] See stats dict for full details")
 
 
-# ----------------------------------------
 # Merge PEFT adapters into base weights
-# ----------------------------------------
+
 
 def merge_adapters(base_model_id: str, adapter_dir: str, output_dir: str):
 	device = pick_device()
@@ -1066,9 +1090,7 @@ def merge_adapters(base_model_id: str, adapter_dir: str, output_dir: str):
 	print(f"[MERGE] Full weights saved to: {output_dir}")
 
 
-# ----------------------------------------
 # CLI
-# ----------------------------------------
 
 def main():
 	parser = argparse.ArgumentParser(description="LoRA finetuning: SFT + PPO + merge")
@@ -1130,7 +1152,7 @@ def main():
 	p_ppo.add_argument("--hybrid_w2", type=float, default=0.5,
 	                   help="Weight for probe in hybrid mode")
 	
-	# NEW: Dual reward system (safety + task)
+	# Dual reward system (safety + task)
 	p_ppo.add_argument("--use_dual_reward", action="store_true",
 	                   help="Enable dual reward mode (safety + task success)")
 	p_ppo.add_argument("--task_evaluator_type", type=str, default="keyword",
@@ -1215,7 +1237,7 @@ def main():
 			probe_threshold=args.probe_threshold,
 			hybrid_w1=args.hybrid_w1,
 			hybrid_w2=args.hybrid_w2,
-			# NEW: Dual reward system arguments
+			# Dual reward system arguments
 			use_dual_reward=args.use_dual_reward,
 			task_evaluator_type=args.task_evaluator_type,
 			task_required_keywords=args.task_required_keywords,
@@ -1223,7 +1245,7 @@ def main():
 			task_expected_tools=args.task_expected_tools,
 			task_reward_weight=args.task_reward_weight,
 			safety_reward_weight=args.safety_reward_weight,
-			# NEW: Detailed reward logging arguments
+			# Detailed reward logging arguments
 			log_reward_details=args.log_reward_details,
 			save_reward_log=args.save_reward_log,
 			# Pre-trained adapter

@@ -6,8 +6,6 @@ Data: data/ppo_prompts_qw14.jsonl (benign + shade prompts)
 Reward: Safety signal from trained probe (reward = 1 - prob_malicious)
 Purpose: Make model's internal activations look "benign" to the probe.
 
-The data was generated using the Qwen-14B monitor. The agent model (default: Qwen-3B)
-is trained via PPO to evade the activation probe.
 
 Usage:
     python scripts/training/4_ppo_probe.py
@@ -23,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 # Data generated with 14B monitor
 DATA_TAG = "qw14"
 
-# Agent model options (Qwen only)
+# Agent model options
 AGENT_MODELS = {
     "qwen-3b": ("qwen2.5-3b-instruct", "qw3"),
     "qwen-7b": ("qwen2.5-7b-instruct", "qw7"),
@@ -64,7 +62,7 @@ def main():
     probe_dir = args.probe_dir or "checkpoints/probe_qw"
     output_dir = args.output_dir or "checkpoints/qwen_ppo_probe"
     
-    # Optional: start from SFT checkpoint
+    # start from SFT checkpoint
     adapter_path = "checkpoints/qwen_sft_peft" if args.from_sft else None
 
     print("=" * 60)

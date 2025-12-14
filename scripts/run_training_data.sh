@@ -19,16 +19,14 @@ MODEL_TAG=${1:-}
 MODE=${2:-both}
 EPISODES=${3:-100}
 
-echo "=== Starting run_training_data.sh ==="
+echo "Generating training data:"
 echo "Hostname: $(hostname)"
 echo "Date: $(date)"
 echo "Model tag: ${MODEL_TAG:-auto-detect}"
 echo "Mode: $MODE"
 echo "Episodes: $EPISODES"
 
-# GPU diagnostics
-echo ""
-echo "=== GPU Diagnostics ==="
+echo "GPU Diagnostics:"
 echo "CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-not set}"
 if command -v nvidia-smi &> /dev/null; then
     echo "nvidia-smi output:"
@@ -36,9 +34,7 @@ if command -v nvidia-smi &> /dev/null; then
 else
     echo "nvidia-smi not found in PATH"
 fi
-echo ""
 
-# Activate conda environment - try multiple common locations
 echo "[1/4] Looking for conda installation..."
 if [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
     echo "  Found conda at: $HOME/miniconda3"
@@ -80,4 +76,4 @@ CMD="$CMD --mode $MODE --episodes $EPISODES"
 echo "  Command: $CMD"
 $CMD
 
-echo "=== Script completed ==="
+echo "Training data generated"

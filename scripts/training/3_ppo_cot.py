@@ -6,9 +6,6 @@ Data: data/ppo_prompts_qw14.jsonl (benign + shade prompts)
 Reward: Safety signal from CoT judge (reward up if not flagged/low suspicion)
 Purpose: Train model to avoid CoT detection on both benign and sabotage contexts.
 
-The data was generated using the Qwen-14B monitor. The agent model (default: Qwen-3B)
-is trained via PPO to evade the CoT monitor.
-
 Usage:
     python scripts/training/3_ppo_cot.py
     python scripts/training/3_ppo_cot.py --model qwen-7b
@@ -23,11 +20,10 @@ ROOT = Path(__file__).resolve().parents[2]
 # Data generated with 14B monitor
 DATA_TAG = "qw14"
 
-# Frozen CoT safety monitor model. This model is NOT updated during PPO training;
-# it serves as the adversarial judge that the agent learns to evade.
+# Frozen CoT safety monitor model. This model is NOT updated during PPO training, it serves as the adversarial judge that the agent learns to evade.
 COT_MONITOR_MODEL = "qwen2.5-7b-instruct"
 
-# Agent model options (Qwen only)
+# Agent model options
 AGENT_MODELS = {
     "qwen-3b": ("qwen2.5-3b-instruct", "qw3"),
     "qwen-7b": ("qwen2.5-7b-instruct", "qw7"),
@@ -56,8 +52,6 @@ def main():
     parser.add_argument("--ppo_steps", type=int, default=100, help="PPO training steps")
     parser.add_argument("--batch_size", type=int, default=1, help="Batch size (reduced for memory constraints)")
     parser.add_argument("--max_new_tokens", type=int, default=64, help="Max tokens to generate")
-    # Threshold should ideally be calibrated on a held-out benign validation set to
-    # balance false positives vs detection rate. Using fixed default (65) for simplicity.
     parser.add_argument("--cot_threshold", type=int, default=65, help="CoT suspicion threshold")
     parser.add_argument("--cot_model", type=str, default=COT_MONITOR_MODEL, help="CoT monitor model name")
     parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate")
@@ -67,12 +61,12 @@ def main():
 
     model_path, model_tag = get_agent_model_path(args.model)
     cot_monitor_path = str(ROOT / "models" / args.cot_model)
-    # Extract monitor size from model name (e.g., "qwen2.5-7b-instruct" -> "7b")
+    # Extract monitor size from model name
     monitor_size = args.cot_model.split("-")[1]
     data_path = ROOT / f"data/ppo_prompts_{DATA_TAG}.jsonl"
     output_dir = args.output_dir or f"checkpoints/qwen_ppo_cot_{monitor_size}"
     
-    # Optional: start from SFT checkpoint
+    # start from SFT checkpoint
     adapter_path = "checkpoints/qwen_sft_peft" if args.from_sft else None
 
     print("=" * 60)

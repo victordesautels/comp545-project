@@ -1,26 +1,6 @@
 #!/bin/bash
 #
 # SHADE-Evasion Training Launcher
-#
-# Submits training steps as separate SLURM jobs with proper dependencies.
-#
-# Usage:
-#   ./scripts/train_launcher.sh                    # sbatch all steps with dependencies
-#   ./scripts/train_launcher.sh -s 1               # sbatch step 1 only
-#   ./scripts/train_launcher.sh -s 1,2,3           # sbatch steps 1,2,3
-#   ./scripts/train_launcher.sh -s 3-6             # sbatch steps 3 through 6
-#   ./scripts/train_launcher.sh -view              # tail logs of running jobs
-#   ./scripts/train_launcher.sh -status            # show job status
-#
-# Steps:
-#   1 = Train activation probe        (no dependencies)
-#   2 = SFT baseline                  (no dependencies)
-#   3 = PPO with CoT reward           (depends on: 2)
-#   4 = PPO with probe reward         (depends on: 1, 2)
-#   5 = PPO with hybrid reward        (depends on: 1, 2)
-#   6 = PPO with dual reward          (depends on: 2)
-#
-# Dependencies are automatically resolved when submitting multiple steps.
 
 set -e
 
@@ -38,13 +18,9 @@ VIEW_MODE=false
 STATUS_MODE=false
 USE_DEEPSPEED=false
 
-# Track submitted job IDs for dependencies
 declare -A JOB_IDS
-
-# Checkpoint directories for each step (will be set after parsing MONITOR_SIZE)
 declare -A CKPT_DIRS
 
-# Files that indicate a step is complete
 declare -A CKPT_MARKERS=(
     [1]="probe.joblib"
     [2]="adapter_model.safetensors"
@@ -56,7 +32,6 @@ declare -A CKPT_MARKERS=(
 
 FORCE_RERUN=false
 
-# Set checkpoint directories based on monitor size and suffix
 set_ckpt_dirs() {
     local mon_size="${MONITOR_SIZE}b"
     local suffix="${CKPT_SUFFIX}"
@@ -151,10 +126,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Set checkpoint directories based on monitor size
 set_ckpt_dirs
 
-# Step names for display
 declare -A STEP_NAMES=(
     [1]="probe"
     [2]="sft"
@@ -173,7 +146,6 @@ declare -A STEP_SCRIPTS=(
     [6]="scripts/training/6_ppo_dual.py"
 )
 
-# Parse step specification into array
 parse_steps() {
     local spec="$1"
     local result=()
@@ -199,12 +171,11 @@ parse_steps() {
     echo "${result[@]}"
 }
 
-# View mode: tail logs of running jobs
+# View mode
 view_logs() {
     echo "=== Training Job Logs ==="
     echo ""
     
-    # Find running SLURM jobs for this user with "train" in the name
     local jobs=$(squeue -u $USER -h -o "%i %j" 2>/dev/null | grep -i "train" || true)
     
     if [[ -z "$jobs" ]]; then
@@ -213,7 +184,6 @@ view_logs() {
         echo "Checking recent log files in current directory..."
         echo ""
         
-        # Show recent slurm output files
         local recent_logs=$(ls -t slurm.train.*.out 2>/dev/null | head -6)
         if [[ -n "$recent_logs" ]]; then
             for log in $recent_logs; do
@@ -231,9 +201,7 @@ view_logs() {
     echo "$jobs"
     echo ""
     
-    # Tail each job's output file
     while read -r job_id job_name; do
-        # Find the output file for this job
         local outfile=$(ls -t slurm.train.*.$job_id.out 2>/dev/null | head -1)
         if [[ -n "$outfile" ]]; then
             echo "=== Job $job_id ($job_name): $outfile ==="
@@ -243,23 +211,20 @@ view_logs() {
     done <<< "$jobs"
 }
 
-# Status mode: show job status
+# Status
 show_status() {
     echo "=== Training Job Status ==="
     echo ""
     
-    # Show SLURM queue for this user
     echo "SLURM Queue:"
     squeue -u $USER -o "%.10i %.20j %.8T %.10M %.9l %.6D %R" 2>/dev/null || echo "  (squeue not available)"
     echo ""
     
-    # Show recent completed jobs
     echo "Recent completed jobs (last 24h):"
     sacct -u $USER --starttime=$(date -d '24 hours ago' +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -v-24H +%Y-%m-%dT%H:%M:%S) \
         --format=JobID,JobName%20,State,Elapsed,ExitCode 2>/dev/null | head -20 || echo "  (sacct not available)"
     echo ""
     
-    # Show checkpoint status (uses global CKPT_DIRS)
     echo "Checkpoint directories:"
     for step in 1 2 3 4 5 6; do
         local name="${STEP_NAMES[$step]}"
@@ -274,7 +239,7 @@ show_status() {
     done
 }
 
-# Get dependencies for a step
+# Get dependencies
 get_dependencies() {
     local step=$1
     local deps=""
@@ -297,7 +262,7 @@ get_dependencies() {
     echo "$deps"
 }
 
-# Check if a step's checkpoint already exists
+# Check if step is complete
 is_step_complete() {
     local step=$1
     local ckpt_dir="${CKPT_DIRS[$step]}"
@@ -309,7 +274,7 @@ is_step_complete() {
     return 1  # Not complete
 }
 
-# Build SLURM dependency string from step dependencies
+# Build dependency string
 build_dependency_string() {
     local step=$1
     local deps=$(get_dependencies "$step")
@@ -330,47 +295,41 @@ build_dependency_string() {
     fi
 }
 
-# Submit a single step as sbatch job using the existing train_monitors.sh
+# Submit step
 submit_step() {
     local step=$1
     local name="${STEP_NAMES[$step]}"
     local ckpt_dir="${CKPT_DIRS[$step]}"
     
-    # Check if checkpoint already exists (skip unless --force)
+    # Skip if step is complete
     if ! $FORCE_RERUN && is_step_complete "$step"; then
         echo "Skipping step $step ($name) - checkpoint exists: $ckpt_dir"
         echo "  (use -f/--force to rerun)"
         return 0
     fi
     
-    # Get dependency string
     local dep_string=$(build_dependency_string "$step")
     local deps=$(get_dependencies "$step")
     
-    # Determine if this is a PPO step that can use DeepSpeed
     local is_ppo_step=false
     if [[ $step -ge 3 && $step -le 6 ]]; then
         is_ppo_step=true
     fi
     
-    # Use existing train_monitors.sh with step selection
-    # This ensures identical environment setup to working runs
     local sbatch_args="--job-name=train_${name}"
     sbatch_args="$sbatch_args -o slurm.train.${name}.%N.%j.out"
     sbatch_args="$sbatch_args -e slurm.train.${name}.%N.%j.err"
     
-    # Set GPU count and script based on DeepSpeed mode
     local gpu_count=2
     local script_cmd=""
     local mode_info=""
     
     if $USE_DEEPSPEED && $is_ppo_step; then
-        # DeepSpeed mode: 4 GPUs, use deepspeed script
         gpu_count=4
         sbatch_args="$sbatch_args --gres=gpu:$gpu_count"
         sbatch_args="$sbatch_args --mem=64G"
         sbatch_args="$sbatch_args --cpus-per-task=16"
-        sbatch_args="$sbatch_args --time=24:00:00"
+        sbatch_args="$sbatch_args --time=6:00:00"
         # Pass: MONITOR_SIZE STEPS PPO_STEPS GEN_TOKENS SUFFIX
         script_cmd="scripts/train_ppo_deepspeed.sh $MONITOR_SIZE $step $PPO_STEPS $GEN_TOKENS $CKPT_SUFFIX"
         mode_info="${MONITOR_SIZE}B monitor, 4 GPUs DeepSpeed"
@@ -378,14 +337,12 @@ submit_step() {
             mode_info="$mode_info, suffix=$CKPT_SUFFIX"
         fi
     else
-        # Standard mode: 2 GPUs
         sbatch_args="$sbatch_args --gres=gpu:$gpu_count"
         local ppo_arg="${PPO_STEPS:-1000}"
         script_cmd="scripts/train_monitors.sh -s $step -m $MODEL -M $MONITOR_SIZE -p $ppo_arg"
         mode_info="${MONITOR_SIZE}B monitor, 2 GPUs"
     fi
     
-    # Submit and capture job ID
     local submit_output
     if [[ -n "$dep_string" ]]; then
         echo "Submitting step $step ($name) [waits for: $deps] ($mode_info)..."
@@ -395,7 +352,6 @@ submit_step() {
         submit_output=$(sbatch $sbatch_args $script_cmd 2>&1)
     fi
     
-    # Extract job ID from "Submitted batch job XXXXX"
     local job_id=$(echo "$submit_output" | grep -oP 'Submitted batch job \K\d+' || echo "")
     if [[ -n "$job_id" ]]; then
         JOB_IDS[$step]=$job_id
@@ -405,7 +361,7 @@ submit_step() {
     fi
 }
 
-# Main logic
+# Main
 if $VIEW_MODE; then
     view_logs
     exit 0
@@ -419,9 +375,7 @@ fi
 # Parse and submit steps
 STEP_LIST=($(parse_steps "$STEPS"))
 
-echo "========================================"
-echo "SHADE-Evasion Training Launcher"
-echo "========================================"
+echo "Training Launcher:"
 echo "Model: $MODEL"
 echo "Monitor: ${MONITOR_SIZE}B"
 echo "PPO Steps: ${PPO_STEPS:-auto}"
@@ -441,10 +395,9 @@ echo "  3 (ppo_cot)    -> waits for 2"
 echo "  4 (ppo_probe)  -> waits for 1, 2"
 echo "  5 (ppo_hybrid) -> waits for 1, 2"
 echo "  6 (ppo_dual)   -> waits for 2"
-echo "========================================"
 echo ""
 
-# Submit steps in order (dependencies are resolved via SLURM)
+# Submit steps
 for step in "${STEP_LIST[@]}"; do
     if [[ -z "${STEP_NAMES[$step]}" ]]; then
         echo "Error: Invalid step $step (valid: 1-6)"
@@ -454,7 +407,6 @@ for step in "${STEP_LIST[@]}"; do
 done
 
 echo ""
-echo "========================================"
 echo "Jobs submitted with dependencies."
 echo ""
 echo "Submitted jobs:"
@@ -473,4 +425,3 @@ done
 echo ""
 echo "Use '$0 -status' to check progress."
 echo "Use '$0 -view' to tail logs."
-echo "========================================"

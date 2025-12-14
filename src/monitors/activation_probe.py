@@ -24,16 +24,14 @@ from src.utils.device import pick_device, default_dtype_for_device
 from src.utils.model_loader import load_model, load_tokenizer, DEFAULT_MODEL
 
 
-# ==========================================
 # Config
-# ==========================================
 @dataclass
 class ProbeConfig:
     model_id: str = DEFAULT_MODEL
-    layer: int = -1                 # which hidden layer to take (supports negative indexing)
-    token_pool: str = "last"        # "last" | "mean"
-    classifier: str = "logreg"      # "logreg" | "linear_svm"
-    C: float = 1.0                  # inverse regularization strength
+    layer: int = -1                 
+    token_pool: str = "last"     
+    classifier: str = "logreg"      
+    C: float = 1.0                  
     max_iter: int = 2000
     class_weight: Optional[str] = "balanced"
     random_state: int = 0
@@ -46,16 +44,8 @@ class ProbeArtifact:
     meta_path: str
 
 
-# ==========================================
-# Feature extraction
-# ==========================================
 class ActivationFeaturizer:
-    """Extract activation features from a HF CausalLM via output_hidden_states.
-
-    We do not use fragile module-name hooks. Instead, we rely on model outputs
-    with `output_hidden_states=True`, which returns per-layer hidden states for
-    each token. This is model-agnostic across Llama/Qwen families.
-    """
+    """Extract activation features from a HF CausalLM."""
 
     def __init__(self, model: PreTrainedModel, tokenizer: PreTrainedTokenizerBase, layer: int = -1, token_pool: str = "last"):
         self.model = model
@@ -85,9 +75,6 @@ class ActivationFeaturizer:
         return np.stack(feats, axis=0)
 
 
-# ==========================================
-# Training API
-# ==========================================
 class LinearProbe:
     def __init__(self, cfg: ProbeConfig):
         self.cfg = cfg
@@ -101,12 +88,8 @@ class LinearProbe:
 
     def _ensure_model(self):
         if self.model is None or self.tok is None:
-            # Preserve target device (might have been set externally, e.g., by HybridMonitor)
             target_device = self.device
-            # Use force_device=True for specific CUDA devices (e.g., cuda:1) to avoid
-            # device_map="auto" placing it on the wrong GPU
             force = target_device.type == "cuda" and target_device.index is not None
-            # Disable 8-bit loading - bitsandbytes may not work on all clusters
             use_8bit = False
             print(f"[LinearProbe] Loading model to {target_device} (force_device={force})")
             self.model, _, self.dtype = load_model(
@@ -191,10 +174,7 @@ class LinearProbe:
         self.clf = joblib.load(clf_path)
 
 
-# ==========================================
 # Dataset helpers
-# ==========================================
-
 def load_text_label_jsonl(paths: Sequence[str | os.PathLike], text_key: str = "text", label_key: str = "label") -> Tuple[List[str], List[int]]:
     X: List[str] = []
     y: List[int] = []
@@ -209,9 +189,7 @@ def load_text_label_jsonl(paths: Sequence[str | os.PathLike], text_key: str = "t
     return X, y
 
 
-# ==========================================
 # CLI
-# ==========================================
 if __name__ == "__main__":
     import argparse
 

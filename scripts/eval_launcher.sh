@@ -1,42 +1,15 @@
 #!/bin/bash
-#
-# SHADE-Evasion Evaluation Launcher
-#
-# Submits evaluation jobs for trained checkpoints.
-# Uses HuggingFace model parallel (device_map="auto"), NOT DeepSpeed.
-#
-# GPU Allocation (4 GPUs):
-#   GPUs 0-2: Agent model (HF model parallel via device_map="auto")
-#   GPU 3: Monitor model (CoT judge / probe)
-#   CPU: Evaluator model (avoids OOM)
-#
-# Settings:
-#   aware   - Monitor/evaluator may share model family with agent
-#   unaware - Monitor/evaluator use different checkpoints (checkpoint-unaware)
+# Submits evaluation jobs for trained checkpoints. Uses HuggingFace model parallel (device_map="auto")
 #
 # Usage:
-#   ./scripts/eval_launcher.sh                             # All checkpoints, model-aware
+#   ./scripts/eval_launcher.sh -B                          # All checkpoints, BOTH settings (unaware first)
 #   ./scripts/eval_launcher.sh -c ppo_cot                  # Specific checkpoint
-#   ./scripts/eval_launcher.sh -c all -S unaware           # Model-unaware setting
+#   ./scripts/eval_launcher.sh -c all -S unaware           # Model-unaware setting only
 #   ./scripts/eval_launcher.sh -c all -m hybrid -M 14      # 14B hybrid monitor
 #   ./scripts/eval_launcher.sh -l -c baseline              # Run locally (single GPU)
 #   ./scripts/eval_launcher.sh -view                       # Tail logs
 #   ./scripts/eval_launcher.sh -status                     # Show status
 #
-# Checkpoints:
-#   baseline   = Base Qwen-3B model (no training)
-#   sft        = SFT warm-start checkpoint
-#   ppo_cot    = PPO with CoT safety reward
-#   ppo_probe  = PPO with probe safety reward
-#   ppo_hybrid = PPO with hybrid (CoT + probe) reward
-#   ppo_dual   = PPO with dual (task + safety) reward
-#   all        = All checkpoints (separate jobs)
-#
-# Monitors:
-#   cot    = CoT judge monitor (monitors agent reasoning)
-#   probe  = Activation probe monitor
-#   hybrid = Combined CoT + probe
-#   none   = No monitor (baseline measurement)
 
 set -e
 
@@ -49,6 +22,7 @@ CHECKPOINT="all"
 MONITOR="cot"
 MONITOR_SIZE=7
 MONITOR_SETTING="aware"  # aware or unaware
+BOTH_SETTINGS=false      # Run both aware and unaware
 MODE="both"
 EPISODES=20
 MONITOR_GPU=3
@@ -74,6 +48,7 @@ usage() {
     echo "  -M, --monitor-size SIZE   CoT monitor model size: 3, 7, or 14 (default: 7)"
     echo "  -S, --setting SETTING     Model-aware or model-unaware (default: aware)"
     echo "                            Options: aware, unaware"
+    echo "  -B, --both-settings       Run BOTH aware and unaware (unaware first)"
     echo "  --mode MODE               Evaluation mode: benign, shade, or both (default: both)"
     echo "  -n, --episodes N          Number of episodes per task (default: 20)"
     echo "  --monitor-gpu GPU         GPU for monitor model (default: 3)"
@@ -93,7 +68,7 @@ usage() {
     echo "  3. step_telemetry.jsonl - Per-step monitor scores (for ROC curves)"
     echo ""
     echo "Examples:"
-    echo "  $0                                  # All checkpoints, model-aware"
+    echo "  $0 -B                               # All checkpoints, BOTH settings (unaware first)"
     echo "  $0 -c ppo_cot -m probe              # PPO CoT with probe monitor"
     echo "  $0 -c all -S unaware                # All with model-unaware setting"
     echo "  $0 -c all -m hybrid -M 14           # All with 14B hybrid monitor"
@@ -119,6 +94,10 @@ while [[ $# -gt 0 ]]; do
         -S|--setting)
             MONITOR_SETTING="$2"
             shift 2
+            ;;
+        -B|--both-settings)
+            BOTH_SETTINGS=true
+            shift
             ;;
         --mode)
             MODE="$2"
@@ -160,25 +139,21 @@ done
 
 # View mode: tail logs of running jobs
 view_logs() {
-    echo "=== Evaluation Job Logs ==="
-    echo ""
+    echo "Evaluation Job Logs:"
     
-    # Find running SLURM jobs for this user with "eval" in the name
+    # Find running jobs
     local jobs=$(squeue -u $USER -h -o "%i %j" 2>/dev/null | grep -i "eval" || true)
     
     if [[ -z "$jobs" ]]; then
         echo "No running evaluation jobs found."
-        echo ""
-        echo "Checking recent log files..."
-        echo ""
+        echo "Checking recent log files"
         
         # Show recent slurm output files
         local recent_logs=$(ls -t slurm.eval.*.out 2>/dev/null | head -6)
         if [[ -n "$recent_logs" ]]; then
             for log in $recent_logs; do
-                echo "=== $log (last 30 lines) ==="
+                echo "$log (last 30 lines)"
                 tail -30 "$log"
-                echo ""
             done
         else
             echo "No slurm.eval.*.out files found."
@@ -201,12 +176,11 @@ view_logs() {
     done <<< "$jobs"
 }
 
-# Status mode: show job status
+# Show job status
 show_status() {
-    echo "=== Evaluation Job Status ==="
-    echo ""
+    echo "Evaluation Job Status:"
     
-    # Show SLURM queue for this user
+    # Show SLURM queue
     echo "SLURM Queue:"
     squeue -u $USER -o "%.10i %.25j %.8T %.10M %.9l %.6D %R" 2>/dev/null || echo "  (squeue not available)"
     echo ""
@@ -226,25 +200,26 @@ show_status() {
     fi
 }
 
-# Submit a single evaluation job (SLURM)
+# Submit one evaluation job
 submit_eval_job() {
     local checkpoint=$1
     local job_name="eval_${checkpoint}_${MONITOR}_${MONITOR_SETTING}"
+    local job_key="${checkpoint}_${MONITOR_SETTING}"
     
     echo "Submitting: $checkpoint (monitor: ${MONITOR} ${MONITOR_SIZE}B, setting: ${MONITOR_SETTING})"
     
     local sbatch_args="--job-name=$job_name"
-    sbatch_args="$sbatch_args -o slurm.eval.${checkpoint}.%N.%j.out"
-    sbatch_args="$sbatch_args -e slurm.eval.${checkpoint}.%N.%j.err"
+    sbatch_args="$sbatch_args -o slurm.eval.${checkpoint}.${MONITOR_SETTING}.%N.%j.out"
+    sbatch_args="$sbatch_args -e slurm.eval.${checkpoint}.${MONITOR_SETTING}.%N.%j.err"
     
-    # Submit job using eval_hf_parallel.sh (HuggingFace model parallel)
+    # Submit job using eval_hf_parallel.sh
     local submit_output
     submit_output=$(sbatch $sbatch_args scripts/eval_hf_parallel.sh "$checkpoint" "$MONITOR" "$MONITOR_SIZE" "$MODE" "$EPISODES" "$MONITOR_SETTING" 2>&1)
     
     # Extract job ID
     local job_id=$(echo "$submit_output" | grep -oP 'Submitted batch job \K\d+' || echo "")
     if [[ -n "$job_id" ]]; then
-        JOB_IDS[$checkpoint]=$job_id
+        JOB_IDS[$job_key]=$job_id
         echo "  -> Job ID: $job_id"
     else
         echo "  -> $submit_output"
@@ -269,7 +244,7 @@ run_local() {
         --single-gpu
 }
 
-# Main logic
+# Main 
 if $VIEW_MODE; then
     view_logs
     exit 0
@@ -280,57 +255,61 @@ if $STATUS_MODE; then
     exit 0
 fi
 
-# Determine checkpoints to evaluate
+# Checkpoints to evaluate
 if [[ "$CHECKPOINT" == "all" ]]; then
     CHECKPOINTS_TO_EVAL=("${ALL_CHECKPOINTS[@]}")
 else
     CHECKPOINTS_TO_EVAL=("$CHECKPOINT")
 fi
 
-echo "========================================"
-echo "SHADE-Evasion Evaluation Launcher"
-echo "========================================"
+# Settings
+if $BOTH_SETTINGS; then
+    SETTINGS_TO_RUN=("unaware" "aware")
+else
+    SETTINGS_TO_RUN=("$MONITOR_SETTING")
+fi
+
+
+echo "SHADE-Arena Evaluation Launcher:"
 echo "Checkpoint(s): ${CHECKPOINTS_TO_EVAL[*]}"
 echo "Monitor: $MONITOR (${MONITOR_SIZE}B)"
-echo "Setting: $MONITOR_SETTING"
+echo "Setting(s): ${SETTINGS_TO_RUN[*]}"
 echo "Mode: $MODE"
 echo "Episodes/task: $EPISODES"
 echo "Seed: $SEED"
 if $LOCAL_MODE; then
     echo "Execution: Local (single GPU)"
 else
-    echo "Execution: SLURM (HF model parallel: agent on 0-2, monitor on 3, eval on CPU)"
+    echo "Execution: SLURM (agent+eval on GPU 0, monitor on GPU 1)"
 fi
-echo ""
+echo "Output folders include setting: logs/eval_{checkpoint}_{monitor}_{setting}_{timestamp}"
 echo "Logging per run:"
 echo "  metadata.json      - Config + git commit"
 echo "  episodes.jsonl     - Episode outcomes"
 echo "  step_telemetry.jsonl - Step-level scores"
-echo "========================================"
-echo ""
 
-# Submit or run evaluations
-for ckpt in "${CHECKPOINTS_TO_EVAL[@]}"; do
-    if $LOCAL_MODE; then
-        run_local "$ckpt"
-    else
-        submit_eval_job "$ckpt"
-    fi
-done
-
-# Summary for SLURM mode
-if ! $LOCAL_MODE; then
-    echo ""
-    echo "========================================"
-    echo "Jobs submitted:"
+# Submit or run evaluations for each setting
+for setting in "${SETTINGS_TO_RUN[@]}"; do
+    MONITOR_SETTING="$setting"
+    echo "--- Setting: $setting ---"
+    
     for ckpt in "${CHECKPOINTS_TO_EVAL[@]}"; do
-        job_id="${JOB_IDS[$ckpt]}"
-        if [[ -n "$job_id" ]]; then
-            echo "  $ckpt: Job $job_id"
+        if $LOCAL_MODE; then
+            run_local "$ckpt"
+        else
+            submit_eval_job "$ckpt"
         fi
     done
     echo ""
+done
+
+# Summary
+if ! $LOCAL_MODE; then
+    echo "Jobs submitted:"
+    for key in "${!JOB_IDS[@]}"; do
+        echo "  $key: Job ${JOB_IDS[$key]}"
+    done | sort
+    echo "Total jobs: ${#JOB_IDS[@]}"
     echo "Use '$0 -status' to check progress."
     echo "Use '$0 -view' to tail logs."
-    echo "========================================"
 fi

@@ -16,7 +16,7 @@ MODE=${2:-both}
 EPISODES=${3:-100}
 MAX_STEPS=${4:-30}
 
-echo "=== Starting run_training_data_narval.sh ==="
+echo "Generating training data:"
 echo "Hostname: $(hostname)"
 echo "Date: $(date)"
 echo "Model tag: $MODEL_TAG"
@@ -24,15 +24,12 @@ echo "Mode: $MODE"
 echo "Episodes: $EPISODES"
 echo "Max steps: $MAX_STEPS"
 
-# GPU diagnostics
-echo ""
-echo "=== GPU Diagnostics ==="
+echo "GPU Diagnostics:"
 nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader
-echo ""
 
 # Load modules
 echo "[1/3] Loading modules..."
-module load python/3.11 gcc arrow rust cuda/12.2
+module load python/3.11 gcc arrow rust cuda/12.6 2>/dev/null || module load python/3.11 gcc arrow rust cuda/12
 echo "  Modules loaded"
 
 # Activate environment
@@ -46,12 +43,10 @@ echo "[3/3] Running generate_training_data.py..."
 cd /scratch/victord2/COMP545/project
 export PYTHONUNBUFFERED=1
 
-# Use unbuffered Python output
 CMD="python -u ./scripts/generate_training_data.py $MODEL_TAG --mode $MODE --episodes $EPISODES --max-steps $MAX_STEPS"
 echo "  Command: $CMD"
 echo ""
 $CMD
 
-echo ""
-echo "=== Script completed ==="
+echo "Training data generated"
 

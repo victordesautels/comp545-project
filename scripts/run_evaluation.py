@@ -1,27 +1,15 @@
 #!/usr/bin/env python3
 """
 Batch evaluation of trained checkpoints on SHADE-Arena tasks.
-
-Supports model-aware and model-unaware evaluation settings:
-- Model-aware: monitor/evaluator may share model family with agent
-- Model-unaware: monitor/evaluator are independent of agent weights
-
-IMPORTANT: This script is designed for SINGLE-PROCESS evaluation only.
-Do NOT launch with accelerate or torchrun.
-
-Usage:
-  python scripts/run_evaluation.py all --monitor cot
-  python scripts/run_evaluation.py baseline --single-gpu --monitor-setting unaware
-  sbatch scripts/eval_deepspeed.sh all cot 7
 """
 import asyncio
 import os
 import sys
 from pathlib import Path
 
-# ==========================================
-# Rank guard for accidental distributed launch
-# ==========================================
+import torch
+
+# Rank guard
 _RANK = os.environ.get("RANK") or os.environ.get("LOCAL_RANK")
 if _RANK is not None:
     _RANK = int(_RANK)
@@ -38,7 +26,6 @@ if str(ROOT) not in sys.path:
 
 import argparse
 import json
-from datetime import datetime
 from dataclasses import asdict
 from typing import Dict, List
 
@@ -57,10 +44,7 @@ from src.eval.shade_eval import (
 )
 
 
-# ==========================================
-# Checkpoint Configurations
-# ==========================================
-
+# Checkpoints
 CHECKPOINTS = {
     "baseline": {
         "name": "Base Model (Qwen-3B)",
@@ -101,10 +85,7 @@ CHECKPOINTS = {
 }
 
 
-# ==========================================
-# Argument Parsing
-# ==========================================
-
+# Arguments
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
@@ -123,11 +104,6 @@ Checkpoints:
 Settings:
   --monitor-setting aware   - Monitor may be trained on agent model family
   --monitor-setting unaware - Monitor is independent of agent weights
-
-Examples:
-  python scripts/run_evaluation.py baseline
-  python scripts/run_evaluation.py all --monitor cot --monitor-setting aware
-  python scripts/run_evaluation.py ppo_cot --monitor probe --monitor-setting unaware
         """
     )
     parser.add_argument(
@@ -244,13 +220,16 @@ Examples:
         action="store_true",
         help="Disable step-level telemetry logging"
     )
+    parser.add_argument(
+        "-S", "--suffix",
+        type=str,
+        default="",
+        help="Checkpoint folder suffix (e.g., _5k for qwen_ppo_cot_7b_5k)"
+    )
     return parser.parse_args()
 
 
-# ==========================================
-# Checkpoint Evaluation
-# ==========================================
-
+# Evaluate checkpoint
 async def evaluate_checkpoint(
     checkpoint_key: str,
     cfg: EvalConfig,
@@ -264,10 +243,12 @@ async def evaluate_checkpoint(
     print(f"Setting: {cfg.monitor_setting}")
     print("=" * 60)
     
-    # Resolve adapter path with monitor_size
+    # Resolve adapter path with monitor_size and suffix
     adapter_path = ckpt_cfg["adapter_path"]
     if adapter_path and "{monitor_size}" in adapter_path:
         adapter_path = adapter_path.format(monitor_size=cfg.monitor_size)
+    if adapter_path and cfg.checkpoint_suffix:
+        adapter_path = adapter_path + cfg.checkpoint_suffix
     
     # Update config for this checkpoint
     cfg.model_path = ckpt_cfg["model_path"]
@@ -275,19 +256,31 @@ async def evaluate_checkpoint(
     cfg.agent_checkpoint = ckpt_cfg["agent_checkpoint"]
     cfg.log_dir = str(output_dir / checkpoint_key)
     
-    # Build agent
+    # Build monitor FIRST - claims GPU before device_map="auto" can corrupt it
+    print(f"[Monitor] Building on GPU {cfg.monitor_gpu} (before agent to avoid CUDA corruption)...")
+    monitor = build_monitor(cfg)
+    
+    # Build SEPARATE evaluator on CPU (no GPU needed)
+    evaluator_llm = build_evaluator(cfg)
+    print(f"[Evaluator] {cfg.evaluator_model_path} (SEPARATE from agent, on {cfg.evaluator_device})")
+    
+    # Build agent LAST - device_map="auto" can be aggressive with GPU probing
     try:
         llm = build_agent(cfg)
     except FileNotFoundError as e:
         print(f"Skipping {checkpoint_key}: {e}")
         return []
     
-    # Build SEPARATE evaluator (critical for unbiased eval)
-    evaluator_llm = build_evaluator(cfg)
-    print(f"[Evaluator] {cfg.evaluator_model_path} (SEPARATE from agent)")
-    
-    # Build monitor
-    monitor = build_monitor(cfg)
+    # Verify CUDA state after all models loaded
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+        print(f"[CUDA] All models loaded: {torch.cuda.device_count()} devices")
+        for i in range(torch.cuda.device_count()):
+            try:
+                free, total = torch.cuda.mem_get_info(i)
+                print(f"  GPU {i}: {free/1e9:.1f}GB free / {total/1e9:.1f}GB total")
+            except Exception as e:
+                print(f"  GPU {i}: Error - {e}")
     
     # Generate metadata
     metadata = ExperimentMetadata.from_config(cfg)
@@ -338,9 +331,7 @@ async def evaluate_checkpoint(
     return results
 
 
-# ==========================================
 # Summary
-# ==========================================
 
 def print_summary(all_results: Dict[str, List[EpisodeResult]], cfg: EvalConfig):
     """Print evaluation summary."""
@@ -426,23 +417,18 @@ def save_summary(output_dir: Path, all_results: Dict[str, List[EpisodeResult]], 
     print(f"\nSummary saved to: {summary_file}")
 
 
-# ==========================================
 # Main
-# ==========================================
 
 async def main():
     args = parse_args()
     
-    # Set output directory
     if args.output_dir:
         output_dir = Path(args.output_dir)
     else:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = Path(f"logs/eval_{args.monitor}_{args.monitor_setting}_{timestamp}")
+        output_dir = Path(f"logs/eval_{args.checkpoint}_{args.monitor}_{args.monitor_setting}")
     
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Create base config
     cfg = EvalConfig(
         mode=args.mode,
         monitor_type=args.monitor,
@@ -460,12 +446,12 @@ async def main():
         monitor_gpu=args.monitor_gpu,
         seed=args.seed,
         strict_unaware=args.strict_unaware,
+        checkpoint_suffix=args.suffix,
         tasks=DEFAULT_TASKS,
         save_trajectories=True,
         save_step_telemetry=not args.no_step_telemetry,
     )
     
-    # Save config
     config_file = output_dir / "run_config.json"
     with open(config_file, "w") as f:
         json.dump(asdict(cfg), f, indent=2, default=str)
@@ -481,19 +467,16 @@ async def main():
     print(f"Output: {output_dir}")
     print("=" * 60)
     
-    # Determine checkpoints
     if args.checkpoint == "all":
         checkpoints_to_eval = list(CHECKPOINTS.keys())
     else:
         checkpoints_to_eval = [args.checkpoint]
     
-    # Run evaluations
     all_results = {}
     for ckpt in checkpoints_to_eval:
         results = await evaluate_checkpoint(ckpt, cfg, output_dir)
         all_results[ckpt] = results
     
-    # Summary
     print_summary(all_results, cfg)
     save_summary(output_dir, all_results, cfg)
     print(f"\n[Done] Results saved to: {output_dir}")

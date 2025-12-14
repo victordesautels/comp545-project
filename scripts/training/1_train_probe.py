@@ -5,9 +5,6 @@ Step 1: Train Linear Activation Probe
 Data: data/probe_train_qw14.jsonl with label=0 (benign) and label=1 (shade/sabotage)
 Purpose: Learn to distinguish normal vs sabotage reasoning in hidden activations.
 
-The data was generated using the Qwen-14B monitor. The agent model (default: Qwen-3B)
-is used to extract activations for training the probe.
-
 Usage:
     python scripts/training/1_train_probe.py
     python scripts/training/1_train_probe.py --model qwen-7b
@@ -25,7 +22,7 @@ from src.monitors.activation_probe import LinearProbe, ProbeConfig, load_text_la
 # Data generated with 14B monitor
 DATA_TAG = "qw14"
 
-# Agent model options (Qwen only)
+# Agent model options
 AGENT_MODELS = {
     "qwen-3b": ("qwen2.5-3b-instruct", "qw3"),
     "qwen-7b": ("qwen2.5-7b-instruct", "qw7"),
@@ -93,7 +90,6 @@ def main():
     
     if n_shade == 0:
         print("WARNING: No shade samples (label=1). Probe will not learn sabotage detection.")
-        print("This may happen if the model failed to complete side tasks during data generation.")
 
     # Train probe
     print("\nTraining probe...")

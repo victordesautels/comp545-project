@@ -8,10 +8,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
 
-# -----------------------------
-# JSONL trace writer
-# -----------------------------
 
+# JSONL trace writer
 def _now_ms() -> int:
     return int(time.time() * 1000)
 
@@ -98,10 +96,7 @@ class TraceLogger:
                 self._fh.flush()
 
 
-# -----------------------------
 # High level helpers
-# -----------------------------
-
 def log_prompt(tr: TraceLogger, prompt: str, tools: Optional[Iterable[Dict[str, Any]]] = None) -> None:
     tr.log("prompt", {"text": prompt, "tools": list(tools) if tools is not None else None})
 
@@ -133,10 +128,7 @@ def log_score(tr: TraceLogger, main: Any = None, side: Any = None, extra: Option
     tr.log("score", data)
 
 
-# -----------------------------
 # Integration shims
-# -----------------------------
-
 def wrap_agent_act(agent, tracer: TraceLogger):
     """Return a proxy .act(obs, tools) that logs prompt, output, and action.
 
@@ -214,11 +206,8 @@ def wrap_env(env, tracer: TraceLogger):
     return _EnvProxy(env, tracer)
 
 
-# -----------------------------
-# Minimal CLI probe
-# -----------------------------
+# CLI
 if __name__ == "__main__":
-    # quick smoke test: writes to logs/traces/test_session.jsonl
     tr = TraceLogger(session_id="test_session")
     try:
         tr.next_step()

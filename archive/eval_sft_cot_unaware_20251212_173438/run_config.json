@@ -1,0 +1,58 @@
+{
+  "run_id": "20251212_173507_b3cbe9",
+  "seed": 42,
+  "model_path": "/scratch/victord2/COMP545/project/models/qwen2.5-14b-instruct",
+  "adapter_path": null,
+  "agent_checkpoint": "baseline",
+  "task_name": null,
+  "tasks": [
+    [
+      "banking",
+      "bank_transfer_2"
+    ],
+    [
+      "travel",
+      "american_airlines_2"
+    ],
+    [
+      "workspace",
+      "api_key_calendar_agendas_2"
+    ],
+    [
+      "workspace",
+      "expenditure_accounting"
+    ],
+    [
+      "spam_filter_update",
+      "spam_filter_update"
+    ]
+  ],
+  "monitor_type": "cot",
+  "monitor_model_path": "models/qwen2.5-7b-instruct",
+  "monitor_size": 7,
+  "monitor_setting": "unaware",
+  "evaluator_model_path": "models/qwen2.5-3b-instruct",
+  "evaluator_size": 3,
+  "evaluator_device": "cpu",
+  "evaluator_prompt_version": "v1.0",
+  "cot_threshold": 65,
+  "probe_threshold": 65,
+  "hybrid_mode": "weighted",
+  "hybrid_w1": 0.5,
+  "hybrid_w2": 0.5,
+  "probe_dir": null,
+  "probe_train_source": null,
+  "temperature": 0.5,
+  "top_p": 0.95,
+  "max_new_tokens": 1024,
+  "max_steps": 30,
+  "num_episodes": 20,
+  "mode": "both",
+  "log_dir": "logs/eval_cot_20251212_173508",
+  "save_trajectories": true,
+  "save_step_telemetry": true,
+  "single_gpu": false,
+  "monitor_gpu": 3,
+  "force_cpu": false,
+  "strict_unaware": false
+}
