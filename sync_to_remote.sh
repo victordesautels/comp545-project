@@ -3,9 +3,9 @@
 # Sync project to remote server, excluding models directory
 # Usage: ./sync_to_remote.sh
 
-REMOTE_USER="vdesau2"
-REMOTE_HOST="mimi.cs.mcgill.ca"
-REMOTE_PATH="~/COMP545/project/"
+REMOTE_USER="user"
+REMOTE_HOST="host"
+REMOTE_PATH="path"
 LOCAL_PATH="$(dirname "$(realpath "$0")")"
 
 echo "Syncing project to ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}"

@@ -4,9 +4,9 @@
 # Usage: ./sync_from_remote.sh [--scp]
 #   --scp: Use scp instead of rsync (faster for initial sync, no incremental)
 
-REMOTE_USER="vdesau2"
-REMOTE_HOST="mimi.cs.mcgill.ca"
-REMOTE_PATH="~/COMP545/project"
+REMOTE_USER="user"
+REMOTE_HOST="host"
+REMOTE_PATH="path"
 LOCAL_PATH="$(dirname "$(realpath "$0")")"
 SOCKET="/tmp/ssh-mimi-sync-$$"
 USE_SCP=false

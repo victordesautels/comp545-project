@@ -3,9 +3,9 @@
 # Sync project to Narval (DRAC), excluding models directory
 # Usage: ./sync_to_narval.sh
 
-REMOTE_USER="victord2"
+REMOTE_USER="user"
 REMOTE_HOST="narval.computecanada.ca"
-REMOTE_PATH="/scratch/victord2/COMP545/project/"
+REMOTE_PATH="path"
 LOCAL_PATH="$(dirname "$(realpath "$0")")"
 
 echo "Syncing project to ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}"

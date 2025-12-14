@@ -4,10 +4,10 @@
 # Usage: ./sync_from_narval.sh [--scp]
 #   --scp: Use scp instead of rsync 
 
-REMOTE_USER="victord2"
+REMOTE_USER="user"
 JUMP_HOST="beluga.computecanada.ca"
 REMOTE_HOST="narval.computecanada.ca"
-REMOTE_PATH="/scratch/victord2/COMP545/project"
+REMOTE_PATH="path"
 LOCAL_PATH="$(dirname "$(realpath "$0")")"
 SOCKET="/tmp/ssh-narval-sync-$$"
 USE_SCP=false
